@@ -1,0 +1,413 @@
+# Medfarl AI System
+
+**PC Doctor powered by a local LLM**
+
+> Deep local diagnostics. Zero cloud. All analysis stays on your machine.
+
+Medfarl is a terminal-based diagnostic assistant that runs a local LLM as an agent with
+controlled, read-only tool access to your system. It inspects hardware, processes, packages,
+logs, and services — then explains what it finds in plain language.
+
+---
+
+## Table of contents
+
+- [Why Medfarl](#why-medfarl)
+- [How it works](#how-it-works)
+- [Quick start](#quick-start)
+- [Configuration](#configuration)
+- [Project structure](#project-structure)
+- [Architecture deep dive](#architecture-deep-dive)
+- [Tool reference](#tool-reference)
+- [Safety model](#safety-model)
+- [Supported platforms](#supported-platforms)
+- [Extending Medfarl](#extending-medfarl)
+- [Known limitations](#known-limitations)
+- [Roadmap](#roadmap)
+
+---
+
+## Why Medfarl
+
+Most "AI system assistants" either phone home, hallucinate tool results, or give the LLM
+unrestricted shell access. Medfarl is built around three different priorities:
+
+**Local-first.** Everything runs on your machine. The LLM runs via Ollama (or any
+OpenAI-compatible local backend). No data leaves the host.
+
+**Controlled tool access.** The agent can only call explicitly registered tools. Shell
+execution is limited to a hardcoded allowlist of safe diagnostic commands. No arbitrary
+`subprocess.run(user_input)`. No write or delete operations.
+
+**Real data before conclusions.** The system prompt instructs the model to always call
+`get_system_snapshot` before diagnosing any unknown issue. It is not allowed to invent
+tool results or guess before reading actual system state.
+
+---
+
+## How it works
+
+At startup Medfarl collects a system snapshot (CPU, RAM, disks, temperatures, running
+processes, GPU if available, package manager state) and injects it into the conversation
+as a synthetic bootstrap tool result. The LLM receives this context before the first user
+message — so it can answer basic questions immediately without making extra tool calls.
+
+When you ask a question, the agent enters a tool-calling loop:
+
+```
+user message
+    → LLM decides: answer directly OR call a tool
+        → tool executes locally, result appended to context
+            → LLM continues reasoning
+                → repeat until final text answer
+```
+
+The loop runs for at most `max_tool_steps` iterations (default 8) as a safety cap.
+Conversation history is preserved across turns within a session.
+
+---
+
+## Quick start
+
+### 1. Install Ollama and pull a model
+
+```bash
+curl -fsSL https://ollama.ai/install.sh | sh
+ollama pull llama3.2
+```
+
+Any model with tool-calling support works. Tested models: `llama3.2`, `qwen2.5`,
+`mistral-nemo`. Larger models give better diagnostic reasoning.
+
+### 2. Clone and set up
+
+```bash
+git clone <your-repo-url>
+cd medfarl-ai-system
+
+python -m venv .venv
+source .venv/bin/activate
+
+pip install -r requirements.txt
+```
+
+### 3. Run
+
+```bash
+python main.py --healthcheck
+python main.py --list-models
+python main.py --model qwen3.5:4b
+python main.py --timeout 240 --model qwen3.5:4b
+python main.py --skip-healthcheck
+python main.py --benchmark-models llama3.2:3b qwen3.5:4b qwen3.5:9b
+python main.py
+```
+
+`--healthcheck` verifies that Ollama is reachable and that `MEDFARL_MODEL` is installed
+and supports tool calling before you start the interactive session. `--list-models`
+shows local Ollama models, `--model` overrides the default model for a single run, and
+`--benchmark-models` runs a short side-by-side comparison on fixed prompts. `--timeout`
+overrides the HTTP timeout for slower models, and `--skip-healthcheck` bypasses the
+startup preflight when you explicitly want to try a model anyway. The normal startup
+path runs the same preflight automatically and exits early with a helpful error if
+Ollama is not ready.
+
+You will see the banner and a `medfarl>` prompt. Type any diagnostic question or
+`exit` / `quit` / `q` to quit.
+
+---
+
+## Configuration
+
+All settings live in `config.py` as a `Settings` dataclass. Every field can be
+overridden with an environment variable.
+
+| Variable | Default | Description |
+|---|---|---|
+| `MEDFARL_LLM_URL` | `http://localhost:11434` | Ollama or any OpenAI-compatible endpoint |
+| `MEDFARL_MODEL` | `llama3.2:3b` | Model name as Ollama knows it |
+| `MEDFARL_TIMEOUT` | `120` | HTTP timeout in seconds for LLM calls |
+| `MEDFARL_MAX_TOOL_STEPS` | `8` | Maximum tool call iterations per user turn |
+| `MEDFARL_ALLOWED_READ_ROOTS` | current workspace | `os.pathsep`-separated roots for file read access |
+
+### Using a different backend
+
+Point `MEDFARL_LLM_URL` at any OpenAI-compatible `/v1/chat/completions` endpoint:
+
+```bash
+# LM Studio (default port)
+MEDFARL_LLM_URL=http://localhost:1234 python main.py
+
+# vLLM
+MEDFARL_LLM_URL=http://localhost:8000 MEDFARL_MODEL=mistral python main.py
+
+# Jan
+MEDFARL_LLM_URL=http://localhost:1337 python main.py
+```
+
+---
+
+## Project structure
+
+```
+medfarl-ai-system/
+├── main.py                   entry point and REPL loop
+├── config.py                 Settings dataclass + env var overrides
+├── requirements.txt
+├── core/
+│   ├── agent.py              MedfarlAgent — orchestrator, history, bootstrap
+│   ├── llm_client.py         LLMClient + Tool dataclass
+│   ├── system_scanner.py     SystemScanner — hardware sensors via psutil + pynvml
+│   └── lib_inspector.py      LibInspector — pip, packages, services
+├── tools/
+│   └── tools.py              Tool registry, schemas, implementations, safe allowlist
+└── ui/
+    └── cli.py                Terminal banner and prompt helpers
+```
+
+---
+
+## Architecture deep dive
+
+### Agent (`core/agent.py`)
+
+`MedfarlAgent` owns the conversation history and the tool-calling loop.
+
+**Bootstrap.** On `__init__`, the agent calls `_bootstrap()` which collects a real
+system snapshot and inserts it into `_history` as a synthetic
+`assistant → tool_calls → tool_result` exchange. This follows the exact message format
+the OpenAI spec requires for tool results — not a user message, not a raw JSON dump in
+the system prompt. Models like llama3 and qwen2 are sensitive to this: putting raw JSON
+in a user turn causes confused or ignored context.
+
+```
+_history after bootstrap:
+  [0]  role: assistant  (synthetic — called get_system_snapshot)
+  [1]  role: tool       (real snapshot data)
+```
+
+**Agent loop.** `_run_agent_loop()` builds the full message list
+(`system_prompt + _history`), sends it to the LLM, and handles tool calls one at a time.
+Each tool call appends two messages to the local loop buffer: the assistant turn with
+`tool_calls` and the tool result. At the end of the loop, the final assistant text reply
+is appended to `_history` and returned to the caller.
+
+**Reset.** `agent.reset()` trims `_history` back to the bootstrap entries `[:1]`,
+clearing the conversation while keeping the initial system context.
+
+### LLM client (`core/llm_client.py`)
+
+A thin synchronous HTTP client (via `httpx`) that wraps `/v1/chat/completions`.
+
+It handles one tool call per response round-trip and returns a structured dict:
+
+```python
+{
+    "assistant_message": {"role": "assistant", "content": "..."},
+    "tool_call": {"name": "get_system_snapshot", "arguments": {}},
+    "tool_call_id": "call_abc123",   # passed through from the API response
+}
+```
+
+The `tool_call_id` is critical: it must be echoed back in the tool result message or
+most models raise a validation error on the next turn.
+
+### System scanner (`core/system_scanner.py`)
+
+Uses `psutil` for CPU, memory, disks, network, processes and temperatures.
+Uses `pynvml` for NVIDIA GPU metrics (optional — gracefully absent if not installed).
+
+Reads `/proc/cpuinfo` on Linux and the Windows registry on Windows to get the CPU model
+string, since `platform.processor()` is often empty or wrong.
+
+`SystemScanner.to_dict()` returns a plain nested dict suitable for JSON serialisation
+into the LLM context.
+
+### Library inspector (`core/lib_inspector.py`)
+
+`LibInspector.pip_packages()` uses `importlib.metadata` directly — no subprocess, no
+pip invocation. Fast and works without pip in PATH.
+
+`pip_outdated()` calls `pip list --outdated --format=json` via subprocess. This is slow
+(15–30 seconds on large environments) so it is a separate tool the agent calls only when
+explicitly needed.
+
+System packages are detected by probing `dpkg-query`, `rpm -qa`, or `pacman -Q`
+depending on what is in PATH.
+
+Services come from `systemctl list-units --type=service --all`.
+
+### Tools (`tools/tools.py`)
+
+Each tool is a `Tool` dataclass with a name, description (the LLM reads this when
+deciding what to call), a JSON Schema for parameters, and a Python callable.
+
+**Safe command allowlist.** `SAFE_COMMANDS` maps string keys to hardcoded `argv` lists.
+The model passes a key (e.g. `df_h`), not a raw command string. This prevents prompt
+injection via command arguments entirely.
+
+**Path allowlist.** `read_file` and `list_directory` resolve the requested path and
+check it against `settings.allowed_read_roots` before opening anything. Paths outside
+the allowed roots raise `PermissionError` which becomes a JSON error returned to the LLM.
+
+**Host validation.** `ping_host` rejects any host string containing shell metacharacters
+before passing it to `subprocess.run`.
+
+---
+
+## Tool reference
+
+| Tool | Arguments | What it does |
+|---|---|---|
+| `get_system_snapshot` | — | CPU, RAM, disk, GPU, temps, network, top 5 processes |
+| `get_installed_pip_packages` | — | All pip packages in active environment |
+| `get_pip_outdated` | — | Outdated pip packages (slow, ~15s) |
+| `get_system_packages_summary` | — | Package manager name + failed systemd services |
+| `get_failed_services` | — | List of failed systemd service names |
+| `read_file` | `path` | Read a text file within allowed roots |
+| `list_directory` | `path` | List contents of a directory within allowed roots |
+| `run_safe_command` | `command` (key) | Run a pre-approved command by its allowlist key |
+| `ping_host` | `host` | Ping a hostname or IP address |
+
+### Safe command keys
+
+| Key | Actual command |
+|---|---|
+| `df_h` | `df -h` |
+| `free_h` | `free -h` |
+| `uptime` | `uptime` |
+| `ip_addr` | `ip addr` |
+| `ip_route` | `ip route` |
+| `journal_errors` | `journalctl -p 3 -xb --no-pager` |
+| `lsblk` | `lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINT` |
+
+---
+
+## Safety model
+
+Medfarl is intentionally a diagnostic tool, not an automation platform.
+
+- No arbitrary shell execution. The `run_safe_command` tool only accepts keys from a
+  hardcoded dictionary of safe read-only commands, not raw strings.
+- No write or delete tools. There are no tools that modify files, install packages,
+  change configuration, kill processes, or restart services.
+- Path access is bounded. `read_file` and `list_directory` are limited to roots defined
+  in `MEDFARL_ALLOWED_READ_ROOTS`. By default this is the current workspace so the app
+  works out of the box on Windows, macOS, and Linux.
+- Tool calls are explicit. Only registered tools can be called. The LLM cannot invent
+  new capabilities.
+- Tool results are capped. `read_file` truncates at 12,000 characters. Shell output is
+  truncated at 4,000 characters. This prevents a large log file from silently blowing
+  out the context window.
+
+Future repair capabilities (restarting services, modifying configs, installing packages)
+are planned but will require an explicit confirmation step before execution.
+
+---
+
+## Supported platforms
+
+**Primary target: Linux**
+
+Full functionality including temperatures, systemd services, and package managers.
+
+**Partial: macOS**
+
+CPU, RAM, disk, network, and pip tools work. Temperature sensors and systemd are
+unavailable. System package detection requires Homebrew and is not yet implemented.
+
+**Partial: Windows**
+
+Basic CPU, RAM, disk, network, pip tools, and `ping_host` work. Linux-only safe commands
+and systemd tools return errors or empty results gracefully.
+
+NVIDIA GPU support requires `pynvml` and a working NVIDIA driver on any platform.
+If `pynvml` is not installed or no NVIDIA GPU is present, the GPU section of the
+snapshot will be an empty list — no error.
+
+---
+
+## Extending Medfarl
+
+### Adding a new tool
+
+Add an entry to the list in `tools/tools.py`:
+
+```python
+Tool(
+    name="check_open_ports",
+    description="List open TCP ports on the local machine.",
+    parameters={
+        "type": "object",
+        "properties": {},
+        "required": [],
+    },
+    fn=lambda: _check_open_ports(),
+)
+```
+
+Then implement the function in the same file:
+
+```python
+def _check_open_ports() -> dict:
+    connections = psutil.net_connections(kind="tcp")
+    listening = [
+        {"port": c.laddr.port, "pid": c.pid}
+        for c in connections
+        if c.status == "LISTEN"
+    ]
+    return {"listening_ports": sorted(listening, key=lambda x: x["port"])}
+```
+
+The tool is registered automatically — no other changes needed.
+
+### Adding a new safe command
+
+Add a key and argv to `SAFE_COMMANDS` in `tools/tools.py`:
+
+```python
+SAFE_COMMANDS: Dict[str, List[str]] = {
+    ...
+    "dmesg_errors": ["dmesg", "--level=err,crit", "--notime"],
+}
+```
+
+### Changing the system prompt
+
+Edit `SYSTEM_PROMPT` in `core/agent.py`. The prompt instructs the model on its role,
+what tools to prefer, and what rules to follow. Keep it concise — overly long system
+prompts reduce instruction-following quality on smaller models.
+
+---
+
+## Known limitations
+
+- **Single tool call per LLM response.** The client currently processes only the first
+  tool call in a response. Some models (GPT-4, Claude) batch multiple tool calls in one
+  turn. This is a planned fix.
+
+- **No streaming.** The LLM response is collected in full before displaying. Long
+  reasoning steps can feel slow with no output.
+
+- **No session persistence.** Conversation history lives in memory and is lost when the
+  process exits. No session log is written to disk.
+
+- **pip_outdated is slow.** On environments with many packages this can take 20–30
+  seconds. The agent should warn the user before calling it. Currently it does not.
+
+- **Temperatures on some Linux kernels.** `psutil.sensors_temperatures()` requires
+  kernel modules to expose sensors. On some minimal installs or VMs this returns nothing.
+
+---
+
+## Roadmap
+
+- [ ] Streaming output — print the response token by token
+- [ ] Session log — save conversations to `~/.medfarl/sessions/`
+- [ ] Web UI — FastAPI backend, React frontend, real-time sensor charts
+- [ ] Repair mode — tools that modify the system, with explicit confirmation prompts
+- [ ] Scheduled health checks — run a snapshot on a cron, alert on anomalies
+- [ ] Windows WMI adapter — temperatures, services, and packages on Windows
+- [ ] Multi-tool-call support — handle batched tool calls in one LLM response
+- [ ] Plugin system — drop a Python file into `plugins/` to register new tools
+- [ ] Export — PDF or JSON diagnostics report from a session
