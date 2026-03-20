@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 import uuid
 
@@ -13,6 +14,8 @@ class PendingAction:
     arguments: dict[str, Any]
     summary: str
     risk: str = "medium"
+    plan: list[str] = field(default_factory=list)
+    created_at: str = ""
 
 
 @dataclass
@@ -27,6 +30,7 @@ class ApprovalState:
         arguments: dict[str, Any],
         summary: str,
         risk: str = "medium",
+        plan: list[str] | None = None,
     ) -> PendingAction:
         action = PendingAction(
             id=str(uuid.uuid4())[:8],
@@ -35,6 +39,8 @@ class ApprovalState:
             arguments=arguments,
             summary=summary,
             risk=risk,
+            plan=plan or [],
+            created_at=datetime.now(tz=timezone.utc).isoformat(),
         )
         self.pending = action
         return action

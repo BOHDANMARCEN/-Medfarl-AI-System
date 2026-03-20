@@ -4,8 +4,10 @@ from core.file_ops import (
     append_text_file,
     create_directory,
     create_text_file,
+    delete_junk_files,
     edit_text_file,
     find_junk_files,
+    move_junk_to_quarantine,
     write_text_file,
 )
 from core.llm_client import Tool
@@ -96,6 +98,46 @@ def build_maintenance_tools() -> list[Tool]:
                 "required": [],
             },
             fn=find_junk_files,
+        ),
+        Tool(
+            name="move_junk_to_quarantine",
+            description="Move selected junk files/directories into quarantine storage.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Junk file/directory paths to move",
+                    },
+                    "quarantine_dir": {
+                        "type": "string",
+                        "description": "Optional quarantine root directory",
+                    },
+                },
+                "required": ["paths"],
+            },
+            fn=move_junk_to_quarantine,
+        ),
+        Tool(
+            name="delete_junk_files",
+            description="Delete selected junk files/directories from disk.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Junk file/directory paths to delete",
+                    },
+                    "recursive": {
+                        "type": "boolean",
+                        "description": "Allow recursive deletion for junk directories",
+                    },
+                },
+                "required": ["paths"],
+            },
+            fn=delete_junk_files,
         ),
         Tool(
             name="create_directory",

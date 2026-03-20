@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
+import uuid
 from typing import Any
 
 from config import settings
@@ -12,6 +13,9 @@ from core.action_guard import ensure_under_roots
 
 
 MAX_TEXT_FILE_BYTES = 2 * 1024 * 1024
+MAX_JUNK_PATHS_PER_ACTION = 500
+JUNK_CACHE_DIR_NAMES = {"__pycache__", "cache"}
+JUNK_FILE_SUFFIXES = {".tmp", ".temp", ".old", ".dmp", ".log"}
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -197,6 +201,104 @@ def find_junk_files(
     }
 
 
+def move_junk_to_quarantine(
+    paths: list[str],
+    quarantine_dir: str | None = None,
+) -> dict[str, Any]:
+    if not isinstance(paths, list) or not paths:
+        return {"error": "paths must be a non-empty list"}
+
+    if len(paths) > MAX_JUNK_PATHS_PER_ACTION:
+        return {
+            "error": (
+                f"Too many paths in one action ({len(paths)}). "
+                f"Limit: {MAX_JUNK_PATHS_PER_ACTION}"
+            )
+        }
+
+    destination_root = ensure_under_roots(
+        quarantine_dir or settings.junk_quarantine_dir,
+        settings.allowed_edit_roots,
+        label="Quarantine",
+    )
+    destination_root.mkdir(parents=True, exist_ok=True)
+
+    moved = []
+    failed = []
+    for raw_path in paths:
+        target = _resolve_loose_path(str(raw_path))
+        validation_error = _validate_junk_target(target)
+        if validation_error:
+            failed.append({"path": str(target), "error": validation_error})
+            continue
+
+        token = uuid.uuid4().hex[:8]
+        dest_name = f"{target.name}.{token}"
+        destination = destination_root / dest_name
+        try:
+            shutil.move(str(target), str(destination))
+        except Exception as exc:
+            failed.append({"path": str(target), "error": str(exc)})
+            continue
+
+        moved.append({"source": str(target), "destination": str(destination)})
+
+    return {
+        "quarantine_dir": str(destination_root),
+        "moved_count": len(moved),
+        "failed_count": len(failed),
+        "moved": moved,
+        "failed": failed,
+    }
+
+
+def delete_junk_files(paths: list[str], recursive: bool = False) -> dict[str, Any]:
+    if not isinstance(paths, list) or not paths:
+        return {"error": "paths must be a non-empty list"}
+
+    if len(paths) > MAX_JUNK_PATHS_PER_ACTION:
+        return {
+            "error": (
+                f"Too many paths in one action ({len(paths)}). "
+                f"Limit: {MAX_JUNK_PATHS_PER_ACTION}"
+            )
+        }
+
+    deleted = []
+    failed = []
+    for raw_path in paths:
+        target = _resolve_loose_path(str(raw_path))
+        validation_error = _validate_junk_target(target, allow_quarantine=True)
+        if validation_error:
+            failed.append({"path": str(target), "error": validation_error})
+            continue
+
+        try:
+            if target.is_dir():
+                if not recursive:
+                    failed.append(
+                        {
+                            "path": str(target),
+                            "error": "Directory deletion requires recursive=True",
+                        }
+                    )
+                    continue
+                shutil.rmtree(target)
+                deleted.append({"path": str(target), "type": "dir"})
+            else:
+                target.unlink()
+                deleted.append({"path": str(target), "type": "file"})
+        except Exception as exc:
+            failed.append({"path": str(target), "error": str(exc)})
+
+    return {
+        "deleted_count": len(deleted),
+        "failed_count": len(failed),
+        "deleted": deleted,
+        "failed": failed,
+    }
+
+
 def _junk_roots(scope: str) -> list[Path]:
     if scope not in {"safe", "user"}:
         scope = "safe"
@@ -230,6 +332,48 @@ def _junk_roots(scope: str) -> list[Path]:
         seen.add(key)
         unique.append(resolved)
     return unique
+
+
+def _resolve_loose_path(path: str) -> Path:
+    candidate = Path(os.path.expandvars(path)).expanduser()
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    return candidate.resolve()
+
+
+def _is_under_any_root(path: Path, roots: list[Path]) -> bool:
+    for root in roots:
+        try:
+            path.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _validate_junk_target(path: Path, allow_quarantine: bool = False) -> str | None:
+    if not path.exists():
+        return f"Path does not exist: {path}"
+
+    if allow_quarantine:
+        quarantine_root = _resolve_loose_path(settings.junk_quarantine_dir)
+        if _is_under_any_root(path, [quarantine_root]):
+            return None
+
+    roots = _junk_roots("safe") + _junk_roots("user")
+    if not _is_under_any_root(path, roots):
+        return "Path is outside known junk roots"
+
+    if path.is_dir():
+        name = path.name.casefold()
+        if name not in JUNK_CACHE_DIR_NAMES:
+            return "Directory is not a recognized junk cache folder"
+        return None
+
+    suffix = path.suffix.casefold()
+    if suffix not in JUNK_FILE_SUFFIXES:
+        return "File extension is not in allowed junk categories"
+    return None
 
 
 def _iter_junk_candidates(root: Path):

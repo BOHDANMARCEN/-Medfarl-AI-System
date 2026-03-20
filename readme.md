@@ -17,6 +17,7 @@ maintenance actions through guarded tools with explicit approval.
 - [How it works](#how-it-works)
 - [Quick start](#quick-start)
 - [First user flow](#first-user-flow)
+- [Maintenance mode](#maintenance-mode)
 - [Demo](#demo)
 - [Configuration](#configuration)
 - [Project structure](#project-structure)
@@ -72,6 +73,9 @@ Conversation history is preserved across turns within a session.
 For mutating tools (run program, install/uninstall pip packages, edit files), Medfarl
 creates a pending action plan and waits for `approve` or `cancel` instead of executing
 immediately.
+
+Every pending action gets an `Action ID`. You can confirm or cancel a specific action
+using that ID, and inspect current pending state with `pending`.
 
 ---
 
@@ -134,8 +138,9 @@ When Medfarl plans a mutating action, it pauses and asks for explicit confirmati
 Use:
 
 ```text
-approve
-cancel
+approve <action_id>
+cancel <action_id>
+pending
 ```
 
 ---
@@ -155,6 +160,36 @@ The default UX is optimized for a short, guided first interaction.
 
 For `діагностика ПК`, `процеси`, `диски`, `мережа`, and `логи`, the agent runs
 deterministic local flows and returns short PC Doctor-style reports without chatty detours.
+
+---
+
+## Maintenance mode
+
+Maintenance mode keeps system-changing actions explicit and reviewable.
+
+- Agent builds a short execution plan first.
+- Action is queued with an `Action ID`.
+- Nothing mutating runs until you confirm.
+
+Use control commands:
+
+```text
+pending
+approve <action_id>
+cancel <action_id>
+```
+
+Deterministic maintenance intents currently supported:
+
+- package install requests (`pip_install_package` plan + confirmation)
+- file creation requests (`create_text_file` plan + confirmation)
+- program launch requests (`run_program` plan + confirmation)
+- junk preview requests (`find_junk_files` direct preview)
+
+Junk cleanup stage 2 tools are available and still confirmation-gated:
+
+- `move_junk_to_quarantine(paths)`
+- `delete_junk_files(paths, recursive)`
 
 ---
 
@@ -206,6 +241,9 @@ overridden with an environment variable.
 | `MEDFARL_CONFIRM_PACKAGE_CHANGES` | `1` | Require approval before pip install/uninstall |
 | `MEDFARL_CONFIRM_FILE_EDITS` | `1` | Require approval before create/write/edit file actions |
 | `MEDFARL_CONFIRM_DELETE` | `1` | Reserved for delete actions (future cleanup stage) |
+| `MEDFARL_ENABLE_ACTION_LOG` | `1` | Enable JSONL audit log for pending/approved/cancelled/executed actions |
+| `MEDFARL_ACTION_LOG_PATH` | `./medfarl_actions.log` | Path to the action audit log file |
+| `MEDFARL_JUNK_QUARANTINE_DIR` | `./junk_quarantine` | Default destination for moved junk files |
 
 ### Using a different backend
 
@@ -239,6 +277,7 @@ medfarl-ai-system/
 │   ├── package_manager.py    controlled pip operations via current interpreter
 │   ├── file_ops.py           guarded file create/write/edit helpers + junk preview
 │   ├── antivirus.py          provider adapters for Defender/ClamAV operations
+│   ├── audit.py              JSONL audit logger for mutating action lifecycle
 │   ├── llm_client.py         LLMClient + Tool dataclass
 │   ├── system_scanner.py     SystemScanner — hardware sensors via psutil + pynvml
 │   └── lib_inspector.py      LibInspector — pip, packages, services
@@ -376,6 +415,8 @@ before passing it to `subprocess.run`.
 | `pip_check` | — | Report package dependency conflicts |
 | `pip_freeze` | — | Output installed package versions |
 | `find_junk_files` | `scope`, `older_than_days`, `limit` | Preview temp/cache-like files and estimate cleanup impact |
+| `move_junk_to_quarantine` | `paths`, `quarantine_dir` | Move selected junk paths into quarantine (approval-gated) |
+| `delete_junk_files` | `paths`, `recursive` | Delete selected junk paths from disk (approval-gated, high risk) |
 | `create_directory` | `path` | Create directory in allowed edit roots (approval-gated) |
 | `create_text_file` | `path`, `content` | Create text file in allowed edit roots (approval-gated) |
 | `write_text_file` | `path`, `content`, `overwrite` | Write file with backup-aware behavior (approval-gated) |
@@ -409,7 +450,8 @@ unrestricted automation platform.
   hardcoded dictionary of safe read-only commands, not raw strings.
 - Mutating actions are approval-gated. Tools such as `run_program`, `pip_install_package`,
   `pip_uninstall_package`, and file edit tools are never executed immediately when the
-  model requests them; the agent creates a pending action and asks for `approve`.
+  model requests them; the agent creates a pending action with a human-readable execution
+  plan and asks for `approve <action_id>`.
 - Path access is bounded. `read_file` and `list_directory` are limited to roots defined
   in `MEDFARL_ALLOWED_READ_ROOTS`. By default this is the current workspace so the app
   works out of the box on Windows, macOS, and Linux.
@@ -420,6 +462,8 @@ unrestricted automation platform.
 - Tool results are capped. `read_file` truncates at 12,000 characters. Shell output is
   truncated at 4,000 characters. This prevents a large log file from silently blowing
   out the context window.
+- Mutating lifecycle events (`pending_created`, `approved`, `cancelled`, `executed`) are
+  written to `medfarl_actions.log` as JSONL by default.
 
 Future repair capabilities (restarting services, modifying configs, installing packages)
 are planned but will require an explicit confirmation step before execution.

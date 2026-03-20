@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional
 from config import settings
 from core.action_guard import is_under_roots
 from core.approval import ApprovalState, PendingAction
+from core.audit import log_action_event
+from core.file_ops import find_junk_files
 from core.lib_inspector import LibInspector
 from core.llm_client import LLMClient
 from core.system_scanner import SystemScanner
@@ -155,6 +157,8 @@ MUTATING_TOOLS = {
     "run_program",
     "pip_install_package",
     "pip_uninstall_package",
+    "move_junk_to_quarantine",
+    "delete_junk_files",
     "create_directory",
     "create_text_file",
     "write_text_file",
@@ -164,6 +168,31 @@ MUTATING_TOOLS = {
 
 APPROVE_WORDS = {"approve", "yes", "confirm", "ok", "так", "підтверджую"}
 CANCEL_WORDS = {"cancel", "no", "stop", "ні", "скасуй"}
+PENDING_WORDS = {"pending", "status", "очікує", "очікує?", "статус", "pending action"}
+
+PIP_INSTALL_PATTERNS = [
+    re.compile(
+        r"(?i)\bpip\s+install\s+([A-Za-z0-9_.-]+)(?:==([A-Za-z0-9_.-]+))?(?:\s+--upgrade)?"
+    ),
+    re.compile(
+        r"(?i)\b(?:встанови|встановити|install|установи|установить)\s+(?:pip\s+package\s+|package\s+|пакет\s+)?([A-Za-z0-9_.-]+)(?:==([A-Za-z0-9_.-]+))?"
+    ),
+]
+
+CREATE_FILE_PATTERNS = [
+    re.compile(r"(?i)\b(?:створи|створити|create)\s+(?:text\s+)?(?:file|файл)\s+(.+)"),
+]
+
+RUN_PROGRAM_PATTERNS = [
+    re.compile(r"(?i)\b(?:запусти|запустити|run|launch|start)\b"),
+]
+
+FIND_JUNK_PATTERNS = [
+    re.compile(
+        r"(?i)\b(?:знайди|покажи|перевір|find|show|check)\b.*\b(?:сміт|junk|cache|tmp)"
+    ),
+    re.compile(r"(?i)\b(?:junk|temp|cache)\b.*\b(?:files|cleanup|preview)"),
+]
 
 
 def _greeting_reply(message: str) -> Optional[str]:
@@ -182,6 +211,173 @@ def _greeting_reply(message: str) -> Optional[str]:
             "диски, сеть или логи?"
         )
     return "Hi! What should I check first: overall health, processes, disks, network, or logs?"
+
+
+def _parse_control_command(message: str) -> tuple[Optional[str], Optional[str]]:
+    compact = " ".join(message.strip().split())
+    if not compact:
+        return None, None
+
+    lowered = compact.casefold()
+    if lowered in PENDING_WORDS:
+        return "pending", None
+
+    parts = compact.split(maxsplit=1)
+    head = parts[0].casefold()
+    tail = parts[1].strip() if len(parts) > 1 else None
+
+    if head in APPROVE_WORDS:
+        return "approve", tail
+    if head in CANCEL_WORDS:
+        return "cancel", tail
+    return None, None
+
+
+def _extract_install_request(message: str) -> Optional[dict[str, Any]]:
+    compact = " ".join(message.strip().split())
+    for pattern in PIP_INSTALL_PATTERNS:
+        match = pattern.search(compact)
+        if not match:
+            continue
+        package = match.group(1)
+        version = match.group(2)
+        upgrade = "--upgrade" in compact.casefold() or "онови" in compact.casefold()
+        payload: dict[str, Any] = {"name": package, "upgrade": upgrade}
+        if version:
+            payload["version"] = version
+        return payload
+    return None
+
+
+def _extract_create_file_request(message: str) -> Optional[dict[str, Any]]:
+    compact = " ".join(message.strip().split())
+    lowered = compact.casefold()
+    for pattern in CREATE_FILE_PATTERNS:
+        match = pattern.search(compact)
+        if not match:
+            continue
+        tail = match.group(1).strip()
+        path = _extract_quoted_text(tail) or tail.split()[0]
+        if not path:
+            return None
+
+        content = ""
+        content_markers = ["з текстом", "із текстом", "content:", "with text", "text:"]
+        marker_positions = [
+            lowered.find(marker)
+            for marker in content_markers
+            if lowered.find(marker) != -1
+        ]
+        if marker_positions:
+            pos = min(marker_positions)
+            content_fragment = compact[pos:]
+            separator = ":"
+            if separator in content_fragment:
+                content = content_fragment.split(separator, 1)[1].strip()
+            else:
+                words = content_fragment.split(maxsplit=2)
+                content = words[2] if len(words) >= 3 else ""
+
+        return {"path": path, "content": content}
+    return None
+
+
+def _extract_run_program_request(message: str) -> Optional[dict[str, Any]]:
+    compact = " ".join(message.strip().split())
+    lowered = compact.casefold()
+    if not any(pattern.search(compact) for pattern in RUN_PROGRAM_PATTERNS):
+        return None
+
+    path = _extract_windows_path(compact)
+    if not path:
+        quoted = _extract_quoted_text(compact)
+        if quoted and quoted.casefold().endswith(".exe"):
+            path = quoted
+    if not path:
+        return None
+
+    args: list[str] = []
+    lower_path = path.casefold()
+    marker = compact.casefold().find(lower_path)
+    if marker != -1:
+        after = compact[marker + len(path) :].strip()
+        if after:
+            args = [segment for segment in after.split()[:8] if segment]
+
+    timeout = 120
+    timeout_match = re.search(r"(?i)\btimeout\s*(\d{1,4})\b", lowered)
+    if timeout_match:
+        timeout = max(5, min(int(timeout_match.group(1)), 900))
+
+    payload: dict[str, Any] = {"path": path, "timeout": timeout}
+    if args:
+        payload["args"] = args
+    return payload
+
+
+def _is_find_junk_request(message: str) -> bool:
+    compact = " ".join(message.strip().split())
+    return any(pattern.search(compact) for pattern in FIND_JUNK_PATTERNS)
+
+
+def _extract_older_than_days(message: str) -> int:
+    lowered = message.casefold()
+    match = re.search(r"(?i)\b(\d{1,4})\s*(?:дн|дні|днів|days|day)\b", lowered)
+    if match:
+        return max(0, min(int(match.group(1)), 3650))
+    return 7
+
+
+def _extract_quoted_text(text: str) -> Optional[str]:
+    quote_match = re.search(r"['\"]([^'\"]+)['\"]", text)
+    if quote_match:
+        return quote_match.group(1).strip()
+    backtick_match = re.search(r"`([^`]+)`", text)
+    if backtick_match:
+        return backtick_match.group(1).strip()
+    return None
+
+
+def _deterministic_junk_preview_report(message: str) -> str:
+    scope = (
+        "user"
+        if "user" in message.casefold() or "користувач" in message.casefold()
+        else "safe"
+    )
+    older_days = _extract_older_than_days(message)
+    result = find_junk_files(scope=scope, older_than_days=older_days, limit=30)
+
+    if result.get("error"):
+        return f"Не вдалося зібрати preview сміття: {result['error']}"
+
+    count = int(result.get("count", 0))
+    size_mb = float(result.get("total_size_mb", 0.0))
+    items = result.get("items", [])
+
+    lines = [
+        "Добре, показую preview можливого сміття.",
+        f"- Scope: {scope}.",
+        f"- Знайдено: {count} елементів, приблизний обсяг {size_mb:.2f} MB.",
+    ]
+
+    if not items:
+        lines.append(
+            "- Наразі нічого підозрілого для безпечного прибирання не знайдено."
+        )
+        return "\n".join(lines)
+
+    lines.append("- Топ елементи:")
+    for item in items[:5]:
+        path = item.get("path", "")
+        size = float(item.get("size_bytes", 0)) / 1024**2
+        age = item.get("age_days", "?")
+        category = item.get("category", "unknown")
+        lines.append(f"  - {path} ({category}, {size:.2f} MB, {age} дн.)")
+
+    lines.append(
+        "- Якщо хочеш прибрати це безпечно: спочатку `move_junk_to_quarantine`, потім за потреби `delete_junk_files` після підтвердження."
+    )
+    return "\n".join(lines)
 
 
 def _normalize_intent(message: str) -> str:
@@ -492,16 +688,22 @@ class MedfarlAgent:
 
     def handle_user_message(self, message: str) -> str:
         cleaned_message = message.strip()
-        lowered = cleaned_message.casefold()
 
-        if lowered in APPROVE_WORDS:
-            response = self._approve_pending_action()
+        control_action, control_id = _parse_control_command(cleaned_message)
+        if control_action == "pending":
+            response = self._pending_action_reminder()
             self._history.append({"role": "user", "content": cleaned_message})
             self._history.append({"role": "assistant", "content": response})
             return response
 
-        if lowered in CANCEL_WORDS:
-            response = self._cancel_pending_action()
+        if control_action == "approve":
+            response = self._approve_pending_action(action_id=control_id)
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
+
+        if control_action == "cancel":
+            response = self._cancel_pending_action(action_id=control_id)
             self._history.append({"role": "user", "content": cleaned_message})
             self._history.append({"role": "assistant", "content": response})
             return response
@@ -511,6 +713,52 @@ class MedfarlAgent:
             self._history.append({"role": "user", "content": cleaned_message})
             self._history.append({"role": "assistant", "content": response})
             return response
+
+        install_request = _extract_install_request(cleaned_message)
+        if install_request:
+            response = self._queue_pending_action(
+                tool_name="pip_install_package",
+                arguments=install_request,
+                note="Deterministic maintenance intent: install package.",
+            )
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
+
+        create_file_request = _extract_create_file_request(cleaned_message)
+        if create_file_request:
+            response = self._queue_pending_action(
+                tool_name="create_text_file",
+                arguments=create_file_request,
+                note="Deterministic maintenance intent: create file.",
+            )
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
+
+        run_program_request = _extract_run_program_request(cleaned_message)
+        if run_program_request:
+            run_path = str(run_program_request.get("path", ""))
+            if not is_under_roots(run_path, settings.allowed_exec_roots):
+                guided = _path_guided_reply(run_path, cleaned_message)
+                self._history.append({"role": "user", "content": cleaned_message})
+                self._history.append({"role": "assistant", "content": guided})
+                return guided
+
+            response = self._queue_pending_action(
+                tool_name="run_program",
+                arguments=run_program_request,
+                note="Deterministic maintenance intent: run program.",
+            )
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
+
+        if _is_find_junk_request(cleaned_message):
+            report = _deterministic_junk_preview_report(cleaned_message)
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": report})
+            return report
 
         recent_path = _find_recent_windows_path(self._history)
         candidate_path = _extract_windows_path(cleaned_message) or recent_path
@@ -650,14 +898,11 @@ class MedfarlAgent:
             tool_arguments = tool_call.get("arguments", {})
 
             if tool_name in MUTATING_TOOLS and self._requires_confirmation(tool_name):
-                pending = self.approval.create(
-                    action_type="mutation",
+                return self._queue_pending_action(
                     tool_name=tool_name,
                     arguments=tool_arguments,
-                    summary=self._build_action_summary(tool_name, tool_arguments),
-                    risk=self._action_risk(tool_name),
+                    note="Awaiting explicit user confirmation.",
                 )
-                return self._pending_action_message(pending)
 
             tool_result = execute_tool(tool_name, tool_arguments, self.tool_registry)
             messages.append(
@@ -704,6 +949,8 @@ class MedfarlAgent:
             return settings.require_confirmation_for_exec
         if tool_name in {"pip_install_package", "pip_uninstall_package"}:
             return settings.require_confirmation_for_package_changes
+        if tool_name in {"move_junk_to_quarantine", "delete_junk_files"}:
+            return settings.require_confirmation_for_delete
         if tool_name in {
             "create_directory",
             "create_text_file",
@@ -715,11 +962,12 @@ class MedfarlAgent:
         return False
 
     def _action_risk(self, tool_name: str) -> str:
-        if tool_name in {"pip_uninstall_package"}:
+        if tool_name in {"pip_uninstall_package", "delete_junk_files"}:
             return "high"
         if tool_name in {
             "run_program",
             "pip_install_package",
+            "move_junk_to_quarantine",
             "create_directory",
             "create_text_file",
             "write_text_file",
@@ -731,70 +979,251 @@ class MedfarlAgent:
 
     def _build_action_summary(self, tool_name: str, arguments: dict[str, Any]) -> str:
         if tool_name == "run_program":
+            return "Запуск програми"
+        if tool_name == "pip_install_package":
+            return "Встановлення Python-пакета"
+        if tool_name == "pip_uninstall_package":
+            return "Видалення Python-пакета"
+        if tool_name == "move_junk_to_quarantine":
+            return "Переміщення сміття в quarantine"
+        if tool_name == "delete_junk_files":
+            return "Видалення сміття"
+        if tool_name == "create_directory":
+            return "Створення директорії"
+        if tool_name in {"create_text_file", "write_text_file", "append_text_file"}:
+            return "Запис текстового файла"
+        if tool_name == "edit_text_file":
+            return "Редагування текстового файла"
+        return f"Виконання дії `{tool_name}`"
+
+    def _build_action_plan(
+        self, tool_name: str, arguments: dict[str, Any]
+    ) -> list[str]:
+        risk = self._action_risk(tool_name)
+        if tool_name == "run_program":
             path = arguments.get("path", "<missing>")
             args = arguments.get("args") or []
-            return f"run_program(path={path}, args={args})"
+            cwd = arguments.get("cwd") or "папка виконуваного файла"
+            timeout = arguments.get("timeout") or "120"
+            return [
+                "Що: запуск зовнішньої програми.",
+                f"Файл: `{path}`.",
+                f"Аргументи: {self._format_cli_args(args)}.",
+                f"Робоча папка: `{cwd}`.",
+                f"Таймаут: {timeout} с.",
+                f"Ризик: {risk}.",
+            ]
+
         if tool_name == "pip_install_package":
             name = arguments.get("name", "<missing>")
             version = arguments.get("version")
             upgrade = bool(arguments.get("upgrade", False))
-            if version:
-                package = f"{name}=={version}"
-            else:
-                package = str(name)
-            suffix = " with --upgrade" if upgrade else ""
-            return f"pip_install_package({package}{suffix})"
+            package_text = f"{name}=={version}" if version else str(name)
+            return [
+                "Що: встановлення Python-пакета.",
+                f"Пакет: `{package_text}`.",
+                f"Upgrade режим: {'так' if upgrade else 'ні'}.",
+                "Середовище: поточний інтерпретатор (`sys.executable -m pip`).",
+                f"Ризик: {risk}.",
+            ]
+
         if tool_name == "pip_uninstall_package":
             name = arguments.get("name", "<missing>")
-            return f"pip_uninstall_package({name})"
+            return [
+                "Що: видалення Python-пакета.",
+                f"Пакет: `{name}`.",
+                "Середовище: поточний інтерпретатор (`sys.executable -m pip`).",
+                f"Ризик: {risk}.",
+            ]
 
-        arguments_preview = ", ".join(
-            f"{key}={value}" for key, value in arguments.items()
+        if tool_name == "move_junk_to_quarantine":
+            paths = arguments.get("paths") or []
+            quarantine_dir = (
+                arguments.get("quarantine_dir") or settings.junk_quarantine_dir
+            )
+            return [
+                "Що: переміщення знайденого сміття в quarantine.",
+                f"Елементів: {len(paths)}.",
+                f"Папка quarantine: `{quarantine_dir}`.",
+                f"Ризик: {risk}.",
+            ]
+
+        if tool_name == "delete_junk_files":
+            paths = arguments.get("paths") or []
+            recursive = bool(arguments.get("recursive", False))
+            return [
+                "Що: безповоротне видалення файлів/папок сміття.",
+                f"Елементів: {len(paths)}.",
+                f"Recursive: {'так' if recursive else 'ні'}.",
+                f"Ризик: {risk}.",
+            ]
+
+        if tool_name == "create_directory":
+            return [
+                "Що: створення директорії.",
+                f"Шлях: `{arguments.get('path', '<missing>')}`.",
+                f"Ризик: {risk}.",
+            ]
+
+        if tool_name == "create_text_file":
+            return [
+                "Що: створення текстового файла.",
+                f"Шлях: `{arguments.get('path', '<missing>')}`.",
+                f"Розмір контенту: {len(str(arguments.get('content', '')))} символів.",
+                f"Ризик: {risk}.",
+            ]
+
+        if tool_name == "write_text_file":
+            overwrite = bool(arguments.get("overwrite", False))
+            return [
+                "Що: повний перезапис текстового файла.",
+                f"Шлях: `{arguments.get('path', '<missing>')}`.",
+                f"Overwrite: {'так' if overwrite else 'ні'}.",
+                f"Розмір контенту: {len(str(arguments.get('content', '')))} символів.",
+                f"Ризик: {risk}.",
+            ]
+
+        if tool_name == "append_text_file":
+            return [
+                "Що: додавання тексту в кінець файла.",
+                f"Шлях: `{arguments.get('path', '<missing>')}`.",
+                f"Розмір доданого контенту: {len(str(arguments.get('content', '')))} символів.",
+                f"Ризик: {risk}.",
+            ]
+
+        if tool_name == "edit_text_file":
+            return [
+                "Що: точкове редагування текстового файла.",
+                f"Шлях: `{arguments.get('path', '<missing>')}`.",
+                f"Find: `{arguments.get('find_text', '')}`.",
+                f"Replace: `{arguments.get('replace_text', '')}`.",
+                f"Ризик: {risk}.",
+            ]
+
+        return [
+            f"Що: виконання `{tool_name}`.",
+            f"Аргументи: {json.dumps(arguments, ensure_ascii=False)}.",
+            f"Ризик: {risk}.",
+        ]
+
+    def _format_cli_args(self, args: list[Any]) -> str:
+        if not args:
+            return "без аргументів"
+        formatted = [f"`{str(arg)}`" for arg in args[:8]]
+        if len(args) > 8:
+            formatted.append("...")
+        return " ".join(formatted)
+
+    def _queue_pending_action(
+        self,
+        *,
+        tool_name: str,
+        arguments: dict[str, Any],
+        note: str,
+    ) -> str:
+        plan = self._build_action_plan(tool_name, arguments)
+        pending = self.approval.create(
+            action_type="mutation",
+            tool_name=tool_name,
+            arguments=arguments,
+            summary=self._build_action_summary(tool_name, arguments),
+            risk=self._action_risk(tool_name),
+            plan=plan,
         )
-        return f"{tool_name}({arguments_preview})"
+        log_action_event("pending_created", action=pending, note=note)
+        return self._pending_action_message(pending)
 
     def _pending_action_message(self, pending: PendingAction) -> str:
+        plan_lines = pending.plan or [f"Дія: {pending.summary}."]
+        plan_block = "\n".join(f"- {line}" for line in plan_lines)
         return (
             "Потрібне підтвердження перед зміною системи.\n"
             f"- Action ID: {pending.id}\n"
-            f"- Дія: {pending.summary}\n"
-            f"- Risk: {pending.risk}\n"
-            "Напиши: approve\n"
-            "Або: cancel"
+            f"- Ризик: {pending.risk}\n"
+            f"{plan_block}\n"
+            f"Підтвердити: `approve {pending.id}`\n"
+            f"Скасувати: `cancel {pending.id}`\n"
+            "Переглянути поточну дію: `pending`"
         )
 
     def _pending_action_reminder(self) -> str:
         pending = self.approval.pending
         if pending is None:
             return "Немає дії, яка очікує підтвердження."
+        plan_lines = pending.plan or [pending.summary]
+        plan_preview = "\n".join(f"- {line}" for line in plan_lines[:4])
         return (
             "Зараз є незавершена дія, яка потребує підтвердження.\n"
-            f"- {pending.summary}\n"
-            "Напиши: approve або cancel."
+            f"- Action ID: {pending.id}\n"
+            f"{plan_preview}\n"
+            f"Підтвердити: `approve {pending.id}`\n"
+            f"Скасувати: `cancel {pending.id}`"
         )
 
-    def _approve_pending_action(self) -> str:
+    def _approve_pending_action(self, action_id: Optional[str] = None) -> str:
         pending = self.approval.pending
         if pending is None:
             return "Немає дії, яка очікує підтвердження."
+
+        if action_id and action_id != pending.id:
+            return (
+                "ID дії не збігається з поточною pending-дією.\n"
+                f"Очікується: `{pending.id}`.\n"
+                f"Використай: `approve {pending.id}` або `cancel {pending.id}`."
+            )
+
+        log_action_event(
+            "approved",
+            action=pending,
+            note="User approved pending action.",
+        )
 
         tool_result = execute_tool(
             pending.tool_name,
             pending.arguments,
             self.tool_registry,
         )
+
+        decoded_result = self._decode_tool_result(tool_result)
+        log_action_event(
+            "executed",
+            action=pending,
+            result=decoded_result,
+            note="Pending action executed.",
+        )
+
         self.approval.clear()
         return (
             "Підтверджено. Виконую дію:\n"
+            f"- Action ID: {pending.id}\n"
             f"- {pending.summary}\n\n"
             "Результат:\n"
             f"{tool_result}"
         )
 
-    def _cancel_pending_action(self) -> str:
+    def _cancel_pending_action(self, action_id: Optional[str] = None) -> str:
         pending = self.approval.pending
         if pending is None:
             return "Немає дії, яку треба скасувати."
 
+        if action_id and action_id != pending.id:
+            return (
+                "ID дії не збігається з поточною pending-дією.\n"
+                f"Очікується: `{pending.id}`.\n"
+                f"Використай: `cancel {pending.id}`."
+            )
+
+        log_action_event(
+            "cancelled",
+            action=pending,
+            note="User cancelled pending action.",
+        )
+
         self.approval.clear()
         return f"Скасовано дію: {pending.summary}"
+
+    def _decode_tool_result(self, tool_result: str) -> Any:
+        try:
+            return json.loads(tool_result)
+        except json.JSONDecodeError:
+            return {"raw": tool_result[:4000]}

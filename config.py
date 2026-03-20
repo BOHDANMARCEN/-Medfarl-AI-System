@@ -44,6 +44,13 @@ class Settings:
     require_confirmation_for_file_edits: bool = _env_flag(
         "MEDFARL_CONFIRM_FILE_EDITS", True
     )
+    enable_action_audit_log: bool = _env_flag("MEDFARL_ENABLE_ACTION_LOG", True)
+    action_audit_log_path: str = os.getenv(
+        "MEDFARL_ACTION_LOG_PATH", os.path.join(os.getcwd(), "medfarl_actions.log")
+    )
+    junk_quarantine_dir: str = os.getenv(
+        "MEDFARL_JUNK_QUARANTINE_DIR", os.path.join(os.getcwd(), "junk_quarantine")
+    )
 
     @property
     def llm_base_url(self) -> str:
