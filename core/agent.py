@@ -15,7 +15,7 @@ from core.antivirus import (
 )
 from core.approval import ApprovalState, PendingAction, PendingActionExistsError
 from core.audit import log_action_event, read_action_history, read_last_action
-from core.file_ops import find_junk_files
+from core.file_ops import find_junk_files, show_quarantine
 from core.lib_inspector import LibInspector
 from core.llm_client import LLMClient
 from core.system_scanner import SystemScanner
@@ -167,6 +167,7 @@ MUTATING_TOOLS = {
     "pip_install_package",
     "pip_uninstall_package",
     "move_junk_to_quarantine",
+    "restore_from_quarantine",
     "delete_junk_files",
     "create_directory",
     "create_text_file",
@@ -247,6 +248,18 @@ MOVE_JUNK_PATTERNS = [
 DELETE_JUNK_PATTERNS = [
     re.compile(r"(?i)\b(?:видали|delete|remove)\b.*\b(?:сміт|junk)\b"),
 ]
+
+SHOW_QUARANTINE_PATTERNS = [
+    re.compile(r"(?i)\b(?:show|list)\b.*\bquarantine\b"),
+    re.compile(r"(?i)\b(?:покажи|що\s+в)\b.*\b(?:quarantine|карантин)\b"),
+]
+
+RESTORE_QUARANTINE_PATTERNS = [
+    re.compile(r"(?i)\brestore\b.*\bquarantine\b"),
+    re.compile(r"(?i)\b(?:віднови|поверни)\b.*\b(?:quarantine|карантин)\b"),
+]
+
+QUARANTINE_ENTRY_ID_PATTERN = re.compile(r"\bqk-[0-9a-f]{8}\b", re.IGNORECASE)
 
 ANTIVIRUS_QUICK_SCAN_PATTERNS = [
     re.compile(
@@ -508,6 +521,51 @@ def _extract_delete_junk_request(message: str) -> Optional[dict[str, Any]]:
     }
 
 
+def _is_show_quarantine_request(message: str) -> bool:
+    compact = " ".join(message.strip().split())
+    return any(pattern.search(compact) for pattern in SHOW_QUARANTINE_PATTERNS)
+
+
+def _extract_restore_quarantine_request(message: str) -> Optional[dict[str, Any]]:
+    compact = " ".join(message.strip().split())
+    if not any(pattern.search(compact) for pattern in RESTORE_QUARANTINE_PATTERNS):
+        return None
+
+    entry_ids = []
+    for match in QUARANTINE_ENTRY_ID_PATTERN.finditer(compact):
+        entry_id = match.group(0).lower()
+        if entry_id not in entry_ids:
+            entry_ids.append(entry_id)
+
+    if not entry_ids:
+        return None
+
+    overwrite = bool(re.search(r"(?i)\b(overwrite|перезапис|замінити)\b", compact))
+    payload: dict[str, Any] = {"entry_ids": entry_ids, "overwrite": overwrite}
+
+    destination_root = _extract_restore_destination_root(compact)
+    if destination_root:
+        payload["destination_root"] = destination_root
+    return payload
+
+
+def _extract_restore_destination_root(message: str) -> Optional[str]:
+    lowered = message.casefold()
+    markers = [" destination ", " to ", " у ", " в "]
+    for marker in markers:
+        pos = lowered.rfind(marker)
+        if pos == -1:
+            continue
+        tail = message[pos + len(marker) :].strip()
+        if not tail:
+            continue
+        quoted = _extract_quoted_text(tail)
+        if quoted:
+            return quoted
+        return tail.strip("`'\"")
+    return None
+
+
 def _extract_antivirus_provider(message: str) -> Optional[str]:
     lowered = message.casefold()
     if "defender" in lowered or "windows defender" in lowered:
@@ -649,6 +707,39 @@ def _deterministic_junk_preview_report(message: str) -> str:
         "- Якщо хочеш прибрати це безпечно: спочатку `move_junk_to_quarantine`, потім за потреби `delete_junk_files` після підтвердження."
     )
     return "\n".join(lines)
+
+
+def _deterministic_quarantine_report(limit: int = 20) -> str:
+    result = show_quarantine(limit=limit)
+    entries = result.get("entries", [])
+    lines = [
+        "Показую вміст quarantine.",
+        f"- Елементів: {int(result.get('count', 0))}.",
+        f"- Орієнтовний обсяг: {float(result.get('total_size_mb', 0.0)):.2f} MB.",
+    ]
+
+    if not entries:
+        lines.append("- Quarantine зараз порожній.")
+        return "\n".join(lines)
+
+    lines.append("- Останні записи:")
+    for entry in entries[:limit]:
+        entry_id = entry.get("entry_id") or "no-id"
+        source = entry.get("source") or "невідоме джерело"
+        status = entry.get("status") or "unknown"
+        size_mb = float(entry.get("size_bytes", 0)) / 1024**2
+        lines.append(f"  - {entry_id}: {source} ({status}, {size_mb:.2f} MB)")
+    return "\n".join(lines)
+
+
+def _missing_quarantine_entries(entry_ids: list[str]) -> list[str]:
+    result = show_quarantine(limit=500)
+    available = {
+        str(entry.get("entry_id")).lower()
+        for entry in result.get("entries", [])
+        if entry.get("entry_id")
+    }
+    return [entry_id for entry_id in entry_ids if entry_id.lower() not in available]
 
 
 def _deterministic_antivirus_detect_report() -> str:
@@ -1064,6 +1155,12 @@ class MedfarlAgent:
             self._history.append({"role": "assistant", "content": response})
             return response
 
+        if _is_show_quarantine_request(cleaned_message):
+            response = _deterministic_quarantine_report(limit=20)
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
+
         if control_action == "approve":
             response = self._approve_pending_action(action_id=control_id)
             self._history.append({"role": "user", "content": cleaned_message})
@@ -1078,6 +1175,41 @@ class MedfarlAgent:
 
         if self.approval.has_pending():
             response = self._pending_action_reminder()
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
+
+        restore_request = _extract_restore_quarantine_request(cleaned_message)
+        if restore_request:
+            missing = _missing_quarantine_entries(
+                [
+                    str(entry_id).lower()
+                    for entry_id in restore_request.get("entry_ids", [])
+                ]
+            )
+            if missing:
+                response = (
+                    "Не знайшов такі quarantine entry id: "
+                    + ", ".join(f"`{entry}`" for entry in missing)
+                    + ". Спочатку виконай `show quarantine`."
+                )
+            else:
+                response = self._queue_pending_action(
+                    tool_name="restore_from_quarantine",
+                    arguments=restore_request,
+                    note="Deterministic maintenance intent: restore from quarantine.",
+                )
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
+        if any(
+            pattern.search(" ".join(cleaned_message.strip().split()))
+            for pattern in RESTORE_QUARANTINE_PATTERNS
+        ):
+            response = (
+                "Для restore з quarantine вкажи `entry_id`.\n"
+                "Приклад: `restore from quarantine qk-1234abcd`."
+            )
             self._history.append({"role": "user", "content": cleaned_message})
             self._history.append({"role": "assistant", "content": response})
             return response
@@ -1472,6 +1604,8 @@ class MedfarlAgent:
             return settings.require_confirmation_for_package_changes
         if tool_name in {"move_junk_to_quarantine", "delete_junk_files"}:
             return settings.require_confirmation_for_delete
+        if tool_name == "restore_from_quarantine":
+            return settings.require_confirmation_for_file_edits
         if tool_name in {
             "create_directory",
             "create_text_file",
@@ -1491,6 +1625,7 @@ class MedfarlAgent:
             "run_antivirus_custom_scan",
             "pip_install_package",
             "move_junk_to_quarantine",
+            "restore_from_quarantine",
             "create_directory",
             "create_text_file",
             "write_text_file",
@@ -1513,6 +1648,8 @@ class MedfarlAgent:
             return "Видалення Python-пакета"
         if tool_name == "move_junk_to_quarantine":
             return "Переміщення сміття в quarantine"
+        if tool_name == "restore_from_quarantine":
+            return "Відновлення з quarantine"
         if tool_name == "delete_junk_files":
             return "Видалення сміття"
         if tool_name == "create_directory":
@@ -1591,6 +1728,18 @@ class MedfarlAgent:
                 "Що: переміщення знайденого сміття в quarantine.",
                 f"Елементів: {len(paths)}.",
                 f"Папка quarantine: `{quarantine_dir}`.",
+                f"Ризик: {risk}.",
+            ]
+
+        if tool_name == "restore_from_quarantine":
+            entry_ids = arguments.get("entry_ids") or []
+            destination_root = arguments.get("destination_root") or "оригінальні шляхи"
+            overwrite = bool(arguments.get("overwrite", False))
+            return [
+                "Що: відновлення файлів/папок з quarantine.",
+                f"Entry IDs: {', '.join(f'`{entry}`' for entry in entry_ids[:8]) or 'немає'}.",
+                f"Куди: `{destination_root}`.",
+                f"Overwrite: {'так' if overwrite else 'ні'}.",
                 f"Ризик: {risk}.",
             ]
 

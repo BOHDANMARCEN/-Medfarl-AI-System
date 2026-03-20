@@ -204,7 +204,15 @@ Deterministic maintenance intents currently supported:
 Junk cleanup stage 2 tools are available and still confirmation-gated:
 
 - `move_junk_to_quarantine(paths)`
+- `show_quarantine(limit)`
+- `restore_from_quarantine(entry_ids, destination_root=None, overwrite=False)`
 - `delete_junk_files(paths, recursive)`
+
+Quarantine lifecycle:
+
+```text
+preview -> move to quarantine -> show quarantine -> restore or delete
+```
 
 ### Live example
 
@@ -224,7 +232,16 @@ medfarl> cancel e5f6g7h8
 medfarl> знайди сміття
 ... preview list ...
 
-medfarl> move_junk_to_quarantine(...)
+medfarl> move junk to quarantine C:\Users\User\AppData\Local\Temp\old.tmp
+... Action ID: ...
+
+medfarl> approve <action_id>
+... moved to quarantine ...
+
+medfarl> show quarantine
+... qk-1a2b3c4d ...
+
+medfarl> restore from quarantine qk-1a2b3c4d
 ... Action ID: ...
 ```
 
@@ -453,6 +470,8 @@ before passing it to `subprocess.run`.
 | `pip_freeze` | — | Output installed package versions |
 | `find_junk_files` | `scope`, `older_than_days`, `limit` | Preview temp/cache-like files and estimate cleanup impact |
 | `move_junk_to_quarantine` | `paths`, `quarantine_dir` | Move selected junk paths into quarantine (approval-gated) |
+| `show_quarantine` | `limit` | List quarantine entries with ids, source path, size, and status |
+| `restore_from_quarantine` | `entry_ids`, `destination_root`, `overwrite` | Restore quarantined entries by id (approval-gated) |
 | `delete_junk_files` | `paths`, `recursive` | Delete selected junk paths from disk (approval-gated, high risk) |
 | `create_directory` | `path` | Create directory in allowed edit roots (approval-gated) |
 | `create_text_file` | `path`, `content` | Create text file in allowed edit roots (approval-gated) |

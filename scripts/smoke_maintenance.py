@@ -91,7 +91,7 @@ def main() -> None:
         "Expected deterministic junk preview report",
     )
 
-    # quarantine -> delete via approval flow
+    # quarantine -> show -> restore via approval flow
     temp_junk = Path(tempfile.gettempdir()) / "medfarl_smoke_junk.tmp"
     temp_junk.write_text("junk", encoding="utf-8")
 
@@ -104,7 +104,48 @@ def main() -> None:
     move_payload = _extract_result_payload(move_result_reply)
     moved = move_payload.get("moved", [])
     _assert(moved, "Expected at least one moved junk entry")
-    moved_destination = Path(moved[0]["destination"])
+    quarantine_entry_id = moved[0].get("entry_id")
+    _assert(quarantine_entry_id, "Expected quarantine entry id from move result")
+
+    quarantine_report = agent.handle_user_message("show quarantine")
+    _assert(
+        quarantine_entry_id in quarantine_report,
+        "Expected show quarantine to list moved entry id",
+    )
+
+    restore_target_dir = Path.cwd()
+    restore_target = restore_target_dir / temp_junk.name
+    restore_request = agent.handle_user_message(
+        f"restore from quarantine {quarantine_entry_id} to {restore_target_dir}"
+    )
+    _assert(agent.approval.has_pending(), "Expected pending action for restore request")
+    restore_id = agent.approval.pending.id
+    restore_result_reply = agent.handle_user_message(f"approve {restore_id}")
+    restore_payload = _extract_result_payload(restore_result_reply)
+    _assert(
+        restore_payload.get("restored_count", 0) >= 1,
+        "Expected at least one restored quarantine entry",
+    )
+    _assert(
+        restore_target.exists(),
+        "Expected restored junk file to appear in allowed restore destination",
+    )
+    restore_target.unlink(missing_ok=True)
+
+    # move again -> delete from quarantine
+    temp_junk_delete = Path(tempfile.gettempdir()) / "medfarl_smoke_junk_delete.tmp"
+    temp_junk_delete.write_text("junk-delete", encoding="utf-8")
+
+    move_request_2 = agent.handle_user_message(
+        f"move junk to quarantine {temp_junk_delete}"
+    )
+    _assert(agent.approval.has_pending(), "Expected second pending move action")
+    move_id_2 = agent.approval.pending.id
+    move_result_reply_2 = agent.handle_user_message(f"approve {move_id_2}")
+    move_payload_2 = _extract_result_payload(move_result_reply_2)
+    moved_2 = move_payload_2.get("moved", [])
+    _assert(moved_2, "Expected second move result to contain quarantine entry")
+    moved_destination = Path(moved_2[0]["destination"])
 
     delete_request = agent.handle_user_message(f"delete junk {moved_destination}")
     _assert(
@@ -117,6 +158,7 @@ def main() -> None:
         delete_payload.get("deleted_count", 0) >= 1,
         "Expected at least one deleted junk entry",
     )
+    _assert(not temp_junk_delete.exists(), "Expected deleted junk file to be absent")
 
     # history / last action commands
     history = agent.handle_user_message("history actions 5")

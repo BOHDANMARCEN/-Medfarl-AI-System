@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 import os
 from pathlib import Path
 import shutil
@@ -16,6 +17,8 @@ MAX_TEXT_FILE_BYTES = 2 * 1024 * 1024
 MAX_JUNK_PATHS_PER_ACTION = 500
 JUNK_CACHE_DIR_NAMES = {"__pycache__", "cache"}
 JUNK_FILE_SUFFIXES = {".tmp", ".temp", ".old", ".dmp", ".log"}
+QUARANTINE_ID_PREFIX = "qk-"
+QUARANTINE_META_SUFFIX = ".meta.json"
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -216,11 +219,7 @@ def move_junk_to_quarantine(
             )
         }
 
-    destination_root = ensure_under_roots(
-        quarantine_dir or settings.junk_quarantine_dir,
-        settings.allowed_edit_roots,
-        label="Quarantine",
-    )
+    destination_root = _quarantine_root(quarantine_dir)
     destination_root.mkdir(parents=True, exist_ok=True)
 
     moved = []
@@ -232,22 +231,224 @@ def move_junk_to_quarantine(
             failed.append({"path": str(target), "error": validation_error})
             continue
 
-        token = uuid.uuid4().hex[:8]
-        dest_name = f"{target.name}.{token}"
+        entry_id = _generate_quarantine_entry_id()
+        dest_name = f"{target.name}.{entry_id}"
         destination = destination_root / dest_name
+        metadata_path = _quarantine_metadata_path(destination)
         try:
             shutil.move(str(target), str(destination))
         except Exception as exc:
             failed.append({"path": str(target), "error": str(exc)})
             continue
 
-        moved.append({"source": str(target), "destination": str(destination)})
+        metadata = {
+            "entry_id": entry_id,
+            "source": str(target),
+            "quarantined_path": str(destination),
+            "created_at": datetime.now(tz=timezone.utc).isoformat(),
+            "category": _junk_category(target),
+            "size_bytes": _path_size_bytes(destination),
+            "is_dir": destination.is_dir(),
+        }
+
+        try:
+            _atomic_write(
+                metadata_path, json.dumps(metadata, ensure_ascii=False, indent=2)
+            )
+        except Exception as exc:
+            try:
+                shutil.move(str(destination), str(target))
+            except Exception:
+                failed.append(
+                    {
+                        "path": str(target),
+                        "error": (
+                            "Quarantine metadata write failed and rollback also failed: "
+                            f"{exc}"
+                        ),
+                    }
+                )
+                continue
+
+            failed.append(
+                {
+                    "path": str(target),
+                    "error": f"Could not write quarantine metadata: {exc}",
+                }
+            )
+            continue
+
+        moved.append(
+            {
+                "entry_id": entry_id,
+                "source": str(target),
+                "destination": str(destination),
+                "metadata_path": str(metadata_path),
+            }
+        )
 
     return {
         "quarantine_dir": str(destination_root),
         "moved_count": len(moved),
         "failed_count": len(failed),
         "moved": moved,
+        "failed": failed,
+    }
+
+
+def show_quarantine(limit: int = 50) -> dict[str, Any]:
+    limit = max(1, min(int(limit), 500))
+    quarantine_root = _quarantine_root()
+    if not quarantine_root.exists():
+        return {
+            "quarantine_dir": str(quarantine_root),
+            "count": 0,
+            "total_size_mb": 0.0,
+            "entries": [],
+        }
+
+    entries = _load_quarantine_entries(quarantine_root)
+    entries.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
+    total_size = sum(int(entry.get("size_bytes", 0)) for entry in entries)
+
+    return {
+        "quarantine_dir": str(quarantine_root),
+        "count": len(entries),
+        "total_size_mb": round(total_size / 1024**2, 2),
+        "entries": entries[:limit],
+        "truncated": len(entries) > limit,
+    }
+
+
+def restore_from_quarantine(
+    entry_ids: list[str],
+    destination_root: str | None = None,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    if not isinstance(entry_ids, list) or not entry_ids:
+        return {"error": "entry_ids must be a non-empty list"}
+
+    if len(entry_ids) > MAX_JUNK_PATHS_PER_ACTION:
+        return {
+            "error": (
+                f"Too many quarantine entries in one action ({len(entry_ids)}). "
+                f"Limit: {MAX_JUNK_PATHS_PER_ACTION}"
+            )
+        }
+
+    quarantine_root = _quarantine_root()
+    if not quarantine_root.exists():
+        return {
+            "error": f"Quarantine directory does not exist: {quarantine_root}",
+            "restored_count": 0,
+            "failed_count": len(entry_ids),
+            "restored": [],
+            "failed": [
+                {"entry_id": str(entry_id), "error": "Quarantine directory is missing"}
+                for entry_id in entry_ids
+            ],
+        }
+
+    entries = _load_quarantine_entries(quarantine_root)
+    by_id = {
+        str(entry.get("entry_id")): entry for entry in entries if entry.get("entry_id")
+    }
+
+    restored = []
+    failed = []
+    destination_root_path = None
+    if destination_root:
+        destination_root_path = ensure_under_roots(
+            destination_root,
+            settings.allowed_edit_roots,
+            label="Restore destination",
+        )
+        destination_root_path.mkdir(parents=True, exist_ok=True)
+
+    for raw_id in entry_ids:
+        entry_id = str(raw_id).strip()
+        entry = by_id.get(entry_id)
+        if not entry:
+            failed.append(
+                {"entry_id": entry_id, "error": "Quarantine entry was not found"}
+            )
+            continue
+
+        if entry.get("status") != "ok":
+            failed.append(
+                {
+                    "entry_id": entry_id,
+                    "error": f"Quarantine entry is not restorable (status={entry.get('status')})",
+                }
+            )
+            continue
+
+        source_path = str(entry.get("source") or "")
+        if not source_path:
+            failed.append(
+                {"entry_id": entry_id, "error": "Original source path is missing"}
+            )
+            continue
+
+        if destination_root_path is not None:
+            target = destination_root_path / Path(source_path).name
+        else:
+            try:
+                target = ensure_under_roots(
+                    source_path,
+                    settings.allowed_edit_roots,
+                    label="Restore target",
+                )
+            except PermissionError as exc:
+                failed.append({"entry_id": entry_id, "error": str(exc)})
+                continue
+
+        quarantined_path = Path(str(entry.get("quarantined_path") or ""))
+        metadata_path = Path(str(entry.get("metadata_path") or ""))
+        if not quarantined_path.exists():
+            failed.append(
+                {"entry_id": entry_id, "error": "Quarantined file no longer exists"}
+            )
+            continue
+
+        if target.exists() and not overwrite:
+            failed.append(
+                {
+                    "entry_id": entry_id,
+                    "error": f"Restore target already exists: {target}",
+                }
+            )
+            continue
+
+        if target.exists() and overwrite:
+            try:
+                _remove_existing_path(target)
+            except Exception as exc:
+                failed.append({"entry_id": entry_id, "error": str(exc)})
+                continue
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.move(str(quarantined_path), str(target))
+            if metadata_path.is_file():
+                metadata_path.unlink()
+        except Exception as exc:
+            failed.append({"entry_id": entry_id, "error": str(exc)})
+            continue
+
+        restored.append(
+            {
+                "entry_id": entry_id,
+                "source": source_path,
+                "restored_to": str(target),
+                "overwrite": overwrite,
+            }
+        )
+
+    return {
+        "restored_count": len(restored),
+        "failed_count": len(failed),
+        "restored": restored,
         "failed": failed,
     }
 
@@ -334,6 +535,118 @@ def _junk_roots(scope: str) -> list[Path]:
     return unique
 
 
+def _quarantine_root(path: str | None = None) -> Path:
+    return ensure_under_roots(
+        path or settings.junk_quarantine_dir,
+        settings.allowed_edit_roots,
+        label="Quarantine",
+    )
+
+
+def _generate_quarantine_entry_id() -> str:
+    return f"{QUARANTINE_ID_PREFIX}{uuid.uuid4().hex[:8]}"
+
+
+def _quarantine_metadata_path(quarantined_path: Path) -> Path:
+    return quarantined_path.parent / f"{quarantined_path.name}{QUARANTINE_META_SUFFIX}"
+
+
+def _path_size_bytes(path: Path) -> int:
+    try:
+        if path.is_file():
+            return path.stat().st_size
+        total = 0
+        for child in path.rglob("*"):
+            if child.is_file():
+                total += child.stat().st_size
+        return total
+    except OSError:
+        return 0
+
+
+def _load_quarantine_entries(quarantine_root: Path) -> list[dict[str, Any]]:
+    metadata_files = sorted(quarantine_root.glob(f"*{QUARANTINE_META_SUFFIX}"))
+    entries: list[dict[str, Any]] = []
+    referenced_names: set[str] = set()
+
+    for meta_path in metadata_files:
+        entry = _load_quarantine_entry(meta_path)
+        entries.append(entry)
+        quarantined_path = entry.get("quarantined_path")
+        if quarantined_path:
+            referenced_names.add(Path(str(quarantined_path)).name)
+
+    for candidate in quarantine_root.iterdir():
+        if candidate.name.endswith(QUARANTINE_META_SUFFIX):
+            continue
+        if candidate.name in referenced_names:
+            continue
+        entries.append(
+            {
+                "entry_id": None,
+                "source": None,
+                "quarantined_path": str(candidate),
+                "metadata_path": None,
+                "created_at": None,
+                "category": "unknown",
+                "size_bytes": _path_size_bytes(candidate),
+                "status": "missing_metadata",
+                "note": "Metadata sidecar is missing; manual recovery required.",
+            }
+        )
+
+    return entries
+
+
+def _load_quarantine_entry(meta_path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return {
+            "entry_id": None,
+            "source": None,
+            "quarantined_path": None,
+            "metadata_path": str(meta_path),
+            "created_at": None,
+            "category": "unknown",
+            "size_bytes": 0,
+            "status": "invalid_metadata",
+            "note": "Metadata could not be parsed.",
+        }
+
+    entry_id = str(payload.get("entry_id") or "").strip() or None
+    source = payload.get("source")
+    quarantined_path = payload.get("quarantined_path")
+    created_at = payload.get("created_at")
+    category = payload.get("category") or "unknown"
+    size_bytes = int(payload.get("size_bytes") or 0)
+
+    status = "ok"
+    note = None
+    if not entry_id or not quarantined_path:
+        status = "invalid_metadata"
+        note = "Metadata is incomplete."
+    else:
+        path = Path(str(quarantined_path))
+        if not path.exists():
+            status = "missing_file"
+            note = "Quarantined file is missing."
+        elif size_bytes <= 0:
+            size_bytes = _path_size_bytes(path)
+
+    return {
+        "entry_id": entry_id,
+        "source": source,
+        "quarantined_path": quarantined_path,
+        "metadata_path": str(meta_path),
+        "created_at": created_at,
+        "category": category,
+        "size_bytes": size_bytes,
+        "status": status,
+        "note": note,
+    }
+
+
 def _resolve_loose_path(path: str) -> Path:
     candidate = Path(os.path.expandvars(path)).expanduser()
     if not candidate.is_absolute():
@@ -374,6 +687,13 @@ def _validate_junk_target(path: Path, allow_quarantine: bool = False) -> str | N
     if suffix not in JUNK_FILE_SUFFIXES:
         return "File extension is not in allowed junk categories"
     return None
+
+
+def _remove_existing_path(path: Path) -> None:
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
 
 
 def _iter_junk_candidates(root: Path):

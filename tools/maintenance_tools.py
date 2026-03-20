@@ -8,6 +8,8 @@ from core.file_ops import (
     edit_text_file,
     find_junk_files,
     move_junk_to_quarantine,
+    restore_from_quarantine,
+    show_quarantine,
     write_text_file,
 )
 from core.llm_client import Tool
@@ -100,6 +102,21 @@ def build_maintenance_tools() -> list[Tool]:
             fn=find_junk_files,
         ),
         Tool(
+            name="show_quarantine",
+            description="List quarantined junk entries with original path, size, and status.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of quarantine entries to return",
+                    }
+                },
+                "required": [],
+            },
+            fn=show_quarantine,
+        ),
+        Tool(
             name="move_junk_to_quarantine",
             description="Move selected junk files/directories into quarantine storage.",
             parameters={
@@ -118,6 +135,30 @@ def build_maintenance_tools() -> list[Tool]:
                 "required": ["paths"],
             },
             fn=move_junk_to_quarantine,
+        ),
+        Tool(
+            name="restore_from_quarantine",
+            description="Restore quarantined junk entries back to their original path or a safe destination.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "entry_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Quarantine entry IDs to restore",
+                    },
+                    "destination_root": {
+                        "type": "string",
+                        "description": "Optional restore destination inside allowed edit roots",
+                    },
+                    "overwrite": {
+                        "type": "boolean",
+                        "description": "Allow overwriting an existing restore target",
+                    },
+                },
+                "required": ["entry_ids"],
+            },
+            fn=restore_from_quarantine,
         ),
         Tool(
             name="delete_junk_files",
