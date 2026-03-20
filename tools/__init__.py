@@ -1,3 +1,4 @@
+from .antivirus_tools import build_antivirus_tools
 from .tools import (
     build_tools,
     execute_tool,

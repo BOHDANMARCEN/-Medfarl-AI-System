@@ -238,11 +238,13 @@ medfarl-ai-system/
 │   ├── program_runner.py     guarded executable launcher
 │   ├── package_manager.py    controlled pip operations via current interpreter
 │   ├── file_ops.py           guarded file create/write/edit helpers + junk preview
+│   ├── antivirus.py          provider adapters for Defender/ClamAV operations
 │   ├── llm_client.py         LLMClient + Tool dataclass
 │   ├── system_scanner.py     SystemScanner — hardware sensors via psutil + pynvml
 │   └── lib_inspector.py      LibInspector — pip, packages, services
 ├── tools/
 │   ├── tools.py              Base diagnostics tools and helper functions
+│   ├── antivirus_tools.py    Antivirus tool registry and schemas
 │   └── maintenance_tools.py  Mutating maintenance tools (approval-gated)
 └── ui/
     └── cli.py                Terminal banner and prompt helpers
@@ -333,6 +335,10 @@ Maintenance tools are split into a dedicated module and merged into the registry
 agent marks mutating calls as pending plans and asks for explicit confirmation before
 execution.
 
+Antivirus tools are implemented through provider adapters (Windows Defender and ClamAV)
+instead of free-form shell calls. This keeps scan/update operations structured and
+platform-aware.
+
 **Safe command allowlist.** `SAFE_COMMANDS` maps string keys to hardcoded `argv` lists.
 The model passes a key (e.g. `df_h`), not a raw command string. This prevents prompt
 injection via command arguments entirely.
@@ -355,6 +361,11 @@ before passing it to `subprocess.run`.
 | `get_top_processes` | `count`, `include_idle` | Busiest active processes by CPU and memory |
 | `get_network_summary` | — | Active interfaces, IP addresses, and traffic totals |
 | `get_recent_errors` | `limit` | Recent critical/error events from Windows Event Log or journalctl |
+| `detect_antivirus` | — | Detect available antivirus providers and status |
+| `update_antivirus_definitions` | `provider` | Update antivirus signatures for Defender/ClamAV |
+| `run_antivirus_quick_scan` | `provider` | Start provider quick scan using adapter defaults |
+| `run_antivirus_custom_scan` | `path`, `provider` | Scan a specific file/folder path via antivirus adapter |
+| `list_antivirus_threats` | `limit`, `provider` | List recent detected threats from provider records/logs |
 | `get_installed_pip_packages` | — | All pip packages in active environment |
 | `get_pip_outdated` | — | Outdated pip packages (slow, ~15s) |
 | `get_system_packages_summary` | — | Package manager name + failed systemd services |
@@ -420,6 +431,7 @@ are planned but will require an explicit confirmation step before execution.
 **Primary target: Linux**
 
 Full functionality including temperatures, systemd services, and package managers.
+ClamAV adapter works when `clamscan` (and optionally `freshclam`) is installed.
 
 **Partial: macOS**
 
@@ -430,7 +442,8 @@ unavailable. System package detection requires Homebrew and is not yet implement
 
 Basic CPU, RAM, disk, network, pip tools, `ping_host`, and `get_recent_errors` work.
 Recent error reads use Windows Event Log through PowerShell. Linux-only safe commands and
-systemd tools return errors or empty results gracefully.
+systemd tools return errors or empty results gracefully. Antivirus adapter supports
+Windows Defender out of the box and ClamAV when binaries are installed.
 
 NVIDIA GPU support requires `pynvml` and a working NVIDIA driver on any platform.
 If `pynvml` is not installed or no NVIDIA GPU is present, the GPU section of the

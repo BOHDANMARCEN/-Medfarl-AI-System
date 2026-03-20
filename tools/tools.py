@@ -13,6 +13,7 @@ from config import settings
 from core.lib_inspector import LibInspector
 from core.llm_client import Tool
 from core.system_scanner import SystemScanner
+from tools.antivirus_tools import build_antivirus_tools
 from tools.maintenance_tools import build_maintenance_tools
 
 
@@ -217,7 +218,7 @@ def build_tools(
         ),
     ]
 
-    return [*base_tools, *build_maintenance_tools()]
+    return [*base_tools, *build_antivirus_tools(), *build_maintenance_tools()]
 
 
 def tool_schemas(tool_registry: list[Tool] | None = None) -> list[dict[str, Any]]:
