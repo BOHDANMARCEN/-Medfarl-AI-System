@@ -18,6 +18,12 @@ class PendingAction:
     created_at: str = ""
 
 
+class PendingActionExistsError(RuntimeError):
+    def __init__(self, pending: PendingAction) -> None:
+        super().__init__(f"Pending action already exists: {pending.id}")
+        self.pending = pending
+
+
 @dataclass
 class ApprovalState:
     pending: PendingAction | None = None
@@ -32,6 +38,9 @@ class ApprovalState:
         risk: str = "medium",
         plan: list[str] | None = None,
     ) -> PendingAction:
+        if self.pending is not None:
+            raise PendingActionExistsError(self.pending)
+
         action = PendingAction(
             id=str(uuid.uuid4())[:8],
             action_type=action_type,

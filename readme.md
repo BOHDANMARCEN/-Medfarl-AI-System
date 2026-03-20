@@ -171,6 +171,7 @@ Maintenance mode keeps system-changing actions explicit and reviewable.
 - Agent builds a short execution plan first.
 - Action is queued with an `Action ID`.
 - Nothing mutating runs until you confirm.
+- Only one pending action is supported at a time. New mutating requests are rejected until you `approve` or `cancel` the current one.
 
 Use control commands:
 

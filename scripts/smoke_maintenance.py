@@ -39,6 +39,17 @@ def main() -> None:
     )
     pending_id = agent.approval.pending.id
 
+    # second mutating request while pending exists -> rejected, same id stays active
+    rejected = agent.handle_user_message("створи файл another_note.txt")
+    _assert(
+        "одна pending-дія" in rejected,
+        "Expected single-pending reminder when second mutating request arrives",
+    )
+    _assert(
+        agent.approval.pending is not None and agent.approval.pending.id == pending_id,
+        "Pending action ID should stay unchanged when new mutating request is rejected",
+    )
+
     # wrong id -> safe refusal
     wrong = agent.handle_user_message("approve wrongid")
     _assert("не збігається" in wrong, "Expected ID mismatch safeguard message")

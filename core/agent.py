@@ -13,7 +13,7 @@ from core.antivirus import (
     run_antivirus_quick_scan,
     update_antivirus_definitions,
 )
-from core.approval import ApprovalState, PendingAction
+from core.approval import ApprovalState, PendingAction, PendingActionExistsError
 from core.audit import log_action_event, read_action_history, read_last_action
 from core.file_ops import find_junk_files
 from core.lib_inspector import LibInspector
@@ -1667,15 +1667,40 @@ class MedfarlAgent:
         arguments: dict[str, Any],
         note: str,
     ) -> str:
+        if self.approval.has_pending():
+            existing = self.approval.pending
+            if existing is not None:
+                log_action_event(
+                    "pending_rejected_existing",
+                    action=existing,
+                    note=(
+                        "Rejected new pending action because another action is still open: "
+                        f"{tool_name}"
+                    ),
+                )
+            return self._pending_action_reminder()
+
         plan = self._build_action_plan(tool_name, arguments)
-        pending = self.approval.create(
-            action_type="mutation",
-            tool_name=tool_name,
-            arguments=arguments,
-            summary=self._build_action_summary(tool_name, arguments),
-            risk=self._action_risk(tool_name),
-            plan=plan,
-        )
+        try:
+            pending = self.approval.create(
+                action_type="mutation",
+                tool_name=tool_name,
+                arguments=arguments,
+                summary=self._build_action_summary(tool_name, arguments),
+                risk=self._action_risk(tool_name),
+                plan=plan,
+            )
+        except PendingActionExistsError as exc:
+            log_action_event(
+                "pending_rejected_existing",
+                action=exc.pending,
+                note=(
+                    "Rejected new pending action due to race/parallel create: "
+                    f"{tool_name}"
+                ),
+            )
+            return self._pending_action_reminder()
+
         log_action_event("pending_created", action=pending, note=note)
         return self._pending_action_message(pending)
 
