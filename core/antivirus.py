@@ -15,6 +15,7 @@ from config import settings
 
 
 SUPPORTED_PROVIDERS = ("windows_defender", "clamav")
+DEFENDER_SERVICE_ERROR_CODE = "0x800106ba"
 
 
 def detect_antivirus() -> dict[str, Any]:
@@ -38,6 +39,7 @@ def detect_antivirus() -> dict[str, Any]:
         "available": bool(providers),
         "providers": providers,
         "default_provider": default_provider,
+        "hints": _build_detection_hints(defender, clamav),
         "details": {
             "windows_defender": defender,
             "clamav": clamav,
@@ -174,7 +176,9 @@ def _run_powershell_json(
         )
         return {
             "ok": False,
-            "error": error_text,
+            "error": _simplify_powershell_error(error_text),
+            "raw_error": error_text[-4000:],
+            "error_code": _extract_error_code(error_text),
             "returncode": result.returncode,
         }
 
@@ -216,9 +220,15 @@ def _detect_windows_defender() -> dict[str, Any]:
     )
     response = _run_powershell_json(script, timeout=20)
     if not response.get("ok"):
+        issue = _friendly_windows_defender_issue(
+            response.get("error") or "Windows Defender status query failed.",
+            error_code=response.get("error_code"),
+        )
         return {
             "available": False,
-            "reason": response.get("error", "Windows Defender status query failed."),
+            "reason": issue["reason"],
+            "error_code": issue.get("error_code"),
+            "manual_checks": issue["manual_checks"],
         }
 
     data = response.get("data") or {}
@@ -238,12 +248,16 @@ def _update_windows_defender_definitions() -> dict[str, Any]:
     )
     response = _run_powershell_json(script, timeout=600)
     if not response.get("ok"):
+        issue = _friendly_windows_defender_issue(
+            response.get("error") or "Windows Defender definitions update failed.",
+            error_code=response.get("error_code"),
+        )
         return {
             "provider": "windows_defender",
             "updated": False,
-            "error": response.get(
-                "error", "Windows Defender definitions update failed."
-            ),
+            "error": issue["reason"],
+            "error_code": issue.get("error_code"),
+            "manual_checks": issue["manual_checks"],
         }
 
     return {
@@ -267,11 +281,17 @@ def _run_windows_defender_quick_scan() -> dict[str, Any]:
     )
     response = _run_powershell_json(script, timeout=1800)
     if not response.get("ok"):
+        issue = _friendly_windows_defender_issue(
+            response.get("error") or "Windows Defender quick scan failed.",
+            error_code=response.get("error_code"),
+        )
         return {
             "provider": "windows_defender",
             "scan_type": "quick",
             "success": False,
-            "error": response.get("error", "Windows Defender quick scan failed."),
+            "error": issue["reason"],
+            "error_code": issue.get("error_code"),
+            "manual_checks": issue["manual_checks"],
         }
 
     data = response.get("data") or {}
@@ -304,12 +324,18 @@ def _run_windows_defender_custom_scan(scan_path: Path) -> dict[str, Any]:
         env_overrides={"MEDFARL_SCAN_PATH": str(scan_path)},
     )
     if not response.get("ok"):
+        issue = _friendly_windows_defender_issue(
+            response.get("error") or "Windows Defender custom scan failed.",
+            error_code=response.get("error_code"),
+        )
         return {
             "provider": "windows_defender",
             "scan_type": "custom",
             "scan_path": str(scan_path),
             "success": False,
-            "error": response.get("error", "Windows Defender custom scan failed."),
+            "error": issue["reason"],
+            "error_code": issue.get("error_code"),
+            "manual_checks": issue["manual_checks"],
         }
 
     data = response.get("data") or {}
@@ -332,11 +358,17 @@ def _list_windows_defender_threats(limit: int) -> dict[str, Any]:
     )
     response = _run_powershell_json(script, timeout=60)
     if not response.get("ok"):
+        issue = _friendly_windows_defender_issue(
+            response.get("error") or "Failed to read Windows Defender threats.",
+            error_code=response.get("error_code"),
+        )
         return {
             "provider": "windows_defender",
             "count": 0,
             "threats": [],
-            "error": response.get("error", "Failed to read Windows Defender threats."),
+            "error": issue["reason"],
+            "error_code": issue.get("error_code"),
+            "manual_checks": issue["manual_checks"],
         }
 
     threats = _normalize_to_list(response.get("data"))
@@ -350,11 +382,14 @@ def _list_windows_defender_threats(limit: int) -> dict[str, Any]:
 def _detect_clamav() -> dict[str, Any]:
     binaries = _find_clamav_binaries()
     clamscan = binaries.get("clamscan")
+    freshclam = binaries.get("freshclam")
+    hints = _clamav_binary_hints(binaries)
     if not clamscan:
         return {
             "available": False,
             "reason": "clamscan executable was not found.",
             "binaries": binaries,
+            "guided_hints": hints,
         }
 
     version_info = _run_command([clamscan, "--version"], timeout=15)
@@ -368,6 +403,8 @@ def _detect_clamav() -> dict[str, Any]:
         "provider": "clamav",
         "binaries": binaries,
         "version": version_line,
+        "guided_hints": hints,
+        "definitions_updatable": bool(freshclam),
     }
 
 
@@ -695,6 +732,95 @@ def _normalize_to_list(value: Any) -> list[Any]:
     if isinstance(value, list):
         return value
     return [value]
+
+
+def _extract_error_code(text: str) -> str | None:
+    code_match = re.search(r"0x[0-9a-fA-F]{8}", text)
+    if code_match:
+        return code_match.group(0).lower()
+
+    fallback = re.search(r"\b800106ba\b", text, flags=re.IGNORECASE)
+    if fallback:
+        return DEFENDER_SERVICE_ERROR_CODE
+    return None
+
+
+def _simplify_powershell_error(text: str) -> str:
+    first_line = text.strip().splitlines()[0:1]
+    if first_line:
+        line = first_line[0].strip()
+        if line:
+            return line
+    compact = " ".join(text.split())
+    return compact[:220] if compact else "PowerShell command failed"
+
+
+def _friendly_windows_defender_issue(
+    error_text: str, *, error_code: str | None = None
+) -> dict[str, Any]:
+    code = error_code or _extract_error_code(error_text or "")
+    if code == DEFENDER_SERVICE_ERROR_CODE:
+        return {
+            "reason": (
+                "Windows Defender зараз недоступний: служба Microsoft Defender Antivirus "
+                "вимкнена або не запущена (0x800106ba)."
+            ),
+            "error_code": DEFENDER_SERVICE_ERROR_CODE,
+            "manual_checks": [
+                "Відкрий Windows Security -> Virus & threat protection і перевір, чи увімкнений Defender.",
+                "У services.msc перевір службу `WinDefend` (стан Running).",
+                "Якщо встановлений інший антивірус, Defender може бути автоматично вимкнений.",
+            ],
+        }
+
+    return {
+        "reason": error_text or "Не вдалося виконати операцію Windows Defender.",
+        "error_code": code,
+        "manual_checks": [
+            "Перевір, що відкривається Windows Security без помилок.",
+            "Перевір статус служб Defender у services.msc.",
+            "Запусти `Get-MpComputerStatus` у PowerShell для ручної перевірки.",
+        ],
+    }
+
+
+def _clamav_binary_hints(binaries: dict[str, str | None]) -> list[str]:
+    clamscan = binaries.get("clamscan")
+    freshclam = binaries.get("freshclam")
+
+    hints = [
+        (
+            f"clamscan.exe: знайдено ({clamscan})"
+            if clamscan
+            else "clamscan.exe: не знайдено (без нього сканування ClamAV недоступне)"
+        ),
+        (
+            f"freshclam.exe: знайдено ({freshclam})"
+            if freshclam
+            else "freshclam.exe: не знайдено (оновлення баз ClamAV недоступне)"
+        ),
+    ]
+    return hints
+
+
+def _build_detection_hints(
+    defender: dict[str, Any], clamav: dict[str, Any]
+) -> list[str]:
+    hints: list[str] = []
+    if defender.get("available"):
+        hints.append("Windows Defender: доступний і готовий до сканування.")
+    else:
+        reason = defender.get("reason") or "недоступний"
+        hints.append(f"Windows Defender: {reason}")
+
+    clamav_hints = clamav.get("guided_hints") or []
+    if clamav_hints:
+        hints.extend(clamav_hints)
+    elif clamav.get("available"):
+        hints.append("ClamAV: доступний.")
+    else:
+        hints.append("ClamAV: недоступний.")
+    return hints
 
 
 def _run_command(argv: list[str], *, timeout: int) -> dict[str, Any]:

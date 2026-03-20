@@ -6,8 +6,15 @@ from typing import Any, Dict, List, Optional
 
 from config import settings
 from core.action_guard import is_under_roots
+from core.antivirus import (
+    detect_antivirus,
+    list_antivirus_threats,
+    run_antivirus_custom_scan,
+    run_antivirus_quick_scan,
+    update_antivirus_definitions,
+)
 from core.approval import ApprovalState, PendingAction
-from core.audit import log_action_event
+from core.audit import log_action_event, read_action_history, read_last_action
 from core.file_ops import find_junk_files
 from core.lib_inspector import LibInspector
 from core.llm_client import LLMClient
@@ -155,6 +162,8 @@ OPERATIONAL_REQUEST_WORDS = {
 
 MUTATING_TOOLS = {
     "run_program",
+    "update_antivirus_definitions",
+    "run_antivirus_custom_scan",
     "pip_install_package",
     "pip_uninstall_package",
     "move_junk_to_quarantine",
@@ -169,6 +178,22 @@ MUTATING_TOOLS = {
 APPROVE_WORDS = {"approve", "yes", "confirm", "ok", "так", "підтверджую"}
 CANCEL_WORDS = {"cancel", "no", "stop", "ні", "скасуй"}
 PENDING_WORDS = {"pending", "status", "очікує", "очікує?", "статус", "pending action"}
+
+HISTORY_WORDS = {
+    "history actions",
+    "history",
+    "історія",
+    "історія дій",
+    "actions history",
+}
+
+LAST_ACTION_WORDS = {
+    "last action",
+    "last",
+    "остання дія",
+    "остання",
+    "last event",
+}
 
 PIP_INSTALL_PATTERNS = [
     re.compile(
@@ -192,6 +217,55 @@ FIND_JUNK_PATTERNS = [
         r"(?i)\b(?:знайди|покажи|перевір|find|show|check)\b.*\b(?:сміт|junk|cache|tmp)"
     ),
     re.compile(r"(?i)\b(?:junk|temp|cache)\b.*\b(?:files|cleanup|preview)"),
+]
+
+PIP_UNINSTALL_PATTERNS = [
+    re.compile(r"(?i)\bpip\s+uninstall\s+([A-Za-z0-9_.-]+)"),
+    re.compile(
+        r"(?i)\b(?:видали|видалити|uninstall|remove|удали|удалить)\s+(?:pip\s+package\s+|package\s+|пакет\s+)?([A-Za-z0-9_.-]+)"
+    ),
+]
+
+APPEND_FILE_PATTERNS = [
+    re.compile(
+        r"(?i)\b(?:додай|додати|append)\s+(?:текст\s+)?(?:у|в|to)\s+(?:файл|file)\s+(.+)"
+    ),
+]
+
+REPLACE_FILE_PATTERNS = [
+    re.compile(
+        r"(?i)\b(?:заміни|заміни\s+в|replace)\s+(?:в\s+файлі|in\s+file)?\s*(?P<path>[^\s]+)\s+(?:['\"](?P<find1>[^'\"]+)['\"]|`(?P<find2>[^`]+)`|(?P<find3>\S+))\s+(?:на|with)\s+(?:['\"](?P<rep1>[^'\"]+)['\"]|`(?P<rep2>[^`]+)`|(?P<rep3>\S+))"
+    ),
+]
+
+MOVE_JUNK_PATTERNS = [
+    re.compile(
+        r"(?i)\b(?:перемісти|move)\b.*\b(?:сміт|junk)\b.*\b(?:quarantine|карантин)"
+    ),
+]
+
+DELETE_JUNK_PATTERNS = [
+    re.compile(r"(?i)\b(?:видали|delete|remove)\b.*\b(?:сміт|junk)\b"),
+]
+
+ANTIVIRUS_QUICK_SCAN_PATTERNS = [
+    re.compile(
+        r"(?i)\b(?:перевір|проскануй|scan|check)\b.*\b(?:антивірус|antivirus|defender|clamav)"
+    ),
+]
+
+ANTIVIRUS_UPDATE_PATTERNS = [
+    re.compile(
+        r"(?i)\b(?:онови|update)\b.*\b(?:бази|definitions|signature|антивірус|defender|clamav)"
+    ),
+]
+
+ANTIVIRUS_CUSTOM_SCAN_PATTERNS = [
+    re.compile(r"(?i)\b(?:проскануй|scan)\b.*\b(?:папк|folder|directory|path)"),
+]
+
+ANTIVIRUS_THREATS_PATTERNS = [
+    re.compile(r"(?i)\b(?:покажи|show|list)\b.*\b(?:загроз|threats|detections)"),
 ]
 
 
@@ -221,6 +295,18 @@ def _parse_control_command(message: str) -> tuple[Optional[str], Optional[str]]:
     lowered = compact.casefold()
     if lowered in PENDING_WORDS:
         return "pending", None
+    if lowered in HISTORY_WORDS:
+        return "history", None
+    if lowered in LAST_ACTION_WORDS:
+        return "last", None
+
+    history_match = re.match(r"(?i)^history\s+actions\s+(\d{1,3})$", compact)
+    if history_match:
+        return "history", history_match.group(1)
+
+    history_short_match = re.match(r"(?i)^history\s+(\d{1,3})$", compact)
+    if history_short_match:
+        return "history", history_short_match.group(1)
 
     parts = compact.split(maxsplit=1)
     head = parts[0].casefold()
@@ -246,6 +332,18 @@ def _extract_install_request(message: str) -> Optional[dict[str, Any]]:
         if version:
             payload["version"] = version
         return payload
+    return None
+
+
+def _extract_uninstall_request(message: str) -> Optional[dict[str, Any]]:
+    compact = " ".join(message.strip().split())
+    for pattern in PIP_UNINSTALL_PATTERNS:
+        match = pattern.search(compact)
+        if not match:
+            continue
+        package = match.group(1)
+        if package:
+            return {"name": package}
     return None
 
 
@@ -279,6 +377,67 @@ def _extract_create_file_request(message: str) -> Optional[dict[str, Any]]:
                 content = words[2] if len(words) >= 3 else ""
 
         return {"path": path, "content": content}
+    return None
+
+
+def _extract_append_file_request(message: str) -> Optional[dict[str, Any]]:
+    compact = " ".join(message.strip().split())
+    for pattern in APPEND_FILE_PATTERNS:
+        match = pattern.search(compact)
+        if not match:
+            continue
+
+        tail = match.group(1).strip()
+        path = _extract_quoted_text(tail)
+        if not path:
+            tokens = tail.split()
+            if not tokens:
+                return None
+            path = tokens[0]
+
+        content = ""
+        lowered = compact.casefold()
+        marker = "text:"
+        marker_pos = lowered.find(marker)
+        if marker_pos == -1:
+            marker = "текст:"
+            marker_pos = lowered.find(marker)
+        if marker_pos != -1:
+            content = compact[marker_pos + len(marker) :].strip()
+        else:
+            quoted_payloads = _extract_all_quoted_texts(compact)
+            if len(quoted_payloads) >= 2:
+                content = quoted_payloads[-1]
+
+        if not content:
+            return None
+        return {"path": path, "content": content}
+    return None
+
+
+def _extract_replace_file_request(message: str) -> Optional[dict[str, Any]]:
+    compact = " ".join(message.strip().split())
+    for pattern in REPLACE_FILE_PATTERNS:
+        match = pattern.search(compact)
+        if not match:
+            continue
+
+        path = (match.group("path") or "").strip()
+        find_text = (
+            match.group("find1") or match.group("find2") or match.group("find3") or ""
+        ).strip()
+        replace_text = (
+            match.group("rep1") or match.group("rep2") or match.group("rep3") or ""
+        ).strip()
+
+        if not path or not find_text:
+            continue
+        return {
+            "path": path,
+            "find_text": find_text,
+            "replace_text": replace_text,
+        }
+
     return None
 
 
@@ -320,6 +479,86 @@ def _is_find_junk_request(message: str) -> bool:
     return any(pattern.search(compact) for pattern in FIND_JUNK_PATTERNS)
 
 
+def _extract_move_junk_request(message: str) -> Optional[dict[str, Any]]:
+    compact = " ".join(message.strip().split())
+    if not any(pattern.search(compact) for pattern in MOVE_JUNK_PATTERNS):
+        return None
+
+    paths = _extract_all_paths(compact)
+    if not paths:
+        return None
+    return {"paths": paths}
+
+
+def _extract_delete_junk_request(message: str) -> Optional[dict[str, Any]]:
+    compact = " ".join(message.strip().split())
+    if not any(pattern.search(compact) for pattern in DELETE_JUNK_PATTERNS):
+        return None
+
+    paths = _extract_all_paths(compact)
+    if not paths:
+        return None
+
+    recursive = bool(
+        re.search(r"(?i)\b(recursive|рекурсивно|включно з папками)\b", compact)
+    )
+    return {
+        "paths": paths,
+        "recursive": recursive,
+    }
+
+
+def _extract_antivirus_provider(message: str) -> Optional[str]:
+    lowered = message.casefold()
+    if "defender" in lowered or "windows defender" in lowered:
+        return "windows_defender"
+    if "clamav" in lowered or "clam" in lowered:
+        return "clamav"
+    return None
+
+
+def _is_antivirus_quick_scan_request(message: str) -> bool:
+    compact = " ".join(message.strip().split())
+    return any(pattern.search(compact) for pattern in ANTIVIRUS_QUICK_SCAN_PATTERNS)
+
+
+def _is_antivirus_update_request(message: str) -> bool:
+    compact = " ".join(message.strip().split())
+    return any(pattern.search(compact) for pattern in ANTIVIRUS_UPDATE_PATTERNS)
+
+
+def _extract_antivirus_custom_scan_request(message: str) -> Optional[dict[str, Any]]:
+    compact = " ".join(message.strip().split())
+    if not any(pattern.search(compact) for pattern in ANTIVIRUS_CUSTOM_SCAN_PATTERNS):
+        return None
+
+    path = _extract_windows_path(compact)
+    if not path:
+        quoted = _extract_quoted_text(compact)
+        if quoted:
+            path = quoted
+    if not path:
+        match = re.search(
+            r"(?i)\b(?:папк[ауи]|folder|directory|path)\s+([^\s]+)", compact
+        )
+        if match:
+            path = match.group(1).strip()
+
+    if not path:
+        return None
+
+    payload: dict[str, Any] = {"path": path}
+    provider = _extract_antivirus_provider(compact)
+    if provider:
+        payload["provider"] = provider
+    return payload
+
+
+def _is_antivirus_threats_request(message: str) -> bool:
+    compact = " ".join(message.strip().split())
+    return any(pattern.search(compact) for pattern in ANTIVIRUS_THREATS_PATTERNS)
+
+
 def _extract_older_than_days(message: str) -> int:
     lowered = message.casefold()
     match = re.search(r"(?i)\b(\d{1,4})\s*(?:дн|дні|днів|days|day)\b", lowered)
@@ -336,6 +575,38 @@ def _extract_quoted_text(text: str) -> Optional[str]:
     if backtick_match:
         return backtick_match.group(1).strip()
     return None
+
+
+def _extract_all_quoted_texts(text: str) -> list[str]:
+    results = []
+    for match in re.finditer(r"['\"]([^'\"]+)['\"]", text):
+        value = match.group(1).strip()
+        if value:
+            results.append(value)
+    for match in re.finditer(r"`([^`]+)`", text):
+        value = match.group(1).strip()
+        if value:
+            results.append(value)
+    return results
+
+
+def _extract_all_paths(text: str) -> list[str]:
+    paths = []
+    windows_paths = WINDOWS_PATH_PATTERN.findall(text)
+    for candidate in windows_paths:
+        candidate = candidate.rstrip(" .,")
+        if candidate and candidate not in paths:
+            paths.append(candidate)
+
+    for quoted in _extract_all_quoted_texts(text):
+        if (
+            "/" in quoted
+            or "\\" in quoted
+            or quoted.endswith((".tmp", ".log", ".dmp", ".old"))
+        ):
+            if quoted not in paths:
+                paths.append(quoted)
+    return paths
 
 
 def _deterministic_junk_preview_report(message: str) -> str:
@@ -377,6 +648,91 @@ def _deterministic_junk_preview_report(message: str) -> str:
     lines.append(
         "- Якщо хочеш прибрати це безпечно: спочатку `move_junk_to_quarantine`, потім за потреби `delete_junk_files` після підтвердження."
     )
+    return "\n".join(lines)
+
+
+def _deterministic_antivirus_detect_report() -> str:
+    detection = detect_antivirus()
+    lines = ["Добре, перевірив доступні антивіруси."]
+
+    providers = detection.get("providers", [])
+    if providers:
+        lines.append(f"- Доступні провайдери: {', '.join(providers)}.")
+        lines.append(
+            f"- Провайдер за замовчуванням: {detection.get('default_provider') or providers[0]}."
+        )
+    else:
+        lines.append(
+            "- Жоден підтримуваний провайдер (Defender/ClamAV) зараз не готовий."
+        )
+
+    for hint in detection.get("hints", [])[:5]:
+        lines.append(f"- {hint}")
+
+    details = detection.get("details", {})
+    defender = details.get("windows_defender", {})
+    if defender.get("error_code") == "0x800106ba":
+        lines.append(
+            "- Defender недоступний через 0x800106ba: зазвичай служба WinDefend вимкнена або зупинена."
+        )
+        for step in (defender.get("manual_checks") or [])[:3]:
+            lines.append(f"  - {step}")
+
+    return "\n".join(lines)
+
+
+def _format_antivirus_scan_report(result: dict[str, Any]) -> str:
+    if result.get("error"):
+        lines = [
+            "Не вдалося виконати антивірусну операцію.",
+            f"- Причина: {result['error']}",
+        ]
+        for step in (result.get("manual_checks") or [])[:3]:
+            lines.append(f"- Перевір вручну: {step}")
+        return "\n".join(lines)
+
+    provider = result.get("provider", "unknown")
+    lines = [f"Готово, операція виконана через `{provider}`."]
+    scan_type = result.get("scan_type")
+    if scan_type:
+        lines.append(f"- Тип сканування: {scan_type}.")
+
+    if "success" in result:
+        lines.append(f"- Статус: {'успіх' if result.get('success') else 'помилка'}.")
+
+    if "threats_count" in result:
+        lines.append(f"- Виявлено загроз: {int(result.get('threats_count', 0))}.")
+
+    if "infected_files_total" in result:
+        lines.append(
+            f"- Підозрілих файлів: {int(result.get('infected_files_total', 0))}."
+        )
+
+    if result.get("error_code"):
+        lines.append(f"- Код помилки: {result['error_code']}.")
+
+    return "\n".join(lines)
+
+
+def _format_antivirus_threats_report(result: dict[str, Any]) -> str:
+    if result.get("error"):
+        lines = ["Не вдалося отримати список загроз.", f"- Причина: {result['error']}"]
+        for step in (result.get("manual_checks") or [])[:3]:
+            lines.append(f"- Перевір вручну: {step}")
+        return "\n".join(lines)
+
+    threats = result.get("threats", [])
+    count = int(result.get("count", len(threats)))
+    provider = result.get("provider", "unknown")
+    lines = [f"Ось останні загрози з `{provider}`.", f"- Кількість записів: {count}."]
+    if not threats:
+        lines.append("- Наразі записів про загрози не знайдено.")
+        return "\n".join(lines)
+
+    for entry in threats[:5]:
+        name = entry.get("threat_name") or entry.get("ThreatName") or "unknown"
+        target = entry.get("target") or entry.get("Resources") or "unknown target"
+        lines.append(f"- {name}: {target}")
     return "\n".join(lines)
 
 
@@ -696,6 +1052,18 @@ class MedfarlAgent:
             self._history.append({"role": "assistant", "content": response})
             return response
 
+        if control_action == "history":
+            response = self._history_actions_report(control_id)
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
+
+        if control_action == "last":
+            response = self._last_action_report()
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
+
         if control_action == "approve":
             response = self._approve_pending_action(action_id=control_id)
             self._history.append({"role": "user", "content": cleaned_message})
@@ -714,6 +1082,80 @@ class MedfarlAgent:
             self._history.append({"role": "assistant", "content": response})
             return response
 
+        if _is_antivirus_update_request(cleaned_message):
+            provider = _extract_antivirus_provider(cleaned_message)
+            arguments: dict[str, Any] = {}
+            if provider:
+                arguments["provider"] = provider
+            response = self._queue_pending_action(
+                tool_name="update_antivirus_definitions",
+                arguments=arguments,
+                note="Deterministic antivirus intent: update definitions.",
+            )
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
+
+        antivirus_custom = _extract_antivirus_custom_scan_request(cleaned_message)
+        if antivirus_custom:
+            response = self._queue_pending_action(
+                tool_name="run_antivirus_custom_scan",
+                arguments=antivirus_custom,
+                note="Deterministic antivirus intent: custom scan.",
+            )
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
+        if any(
+            pattern.search(" ".join(cleaned_message.strip().split()))
+            for pattern in ANTIVIRUS_CUSTOM_SCAN_PATTERNS
+        ):
+            response = (
+                "Щоб запустити кастомне антивірусне сканування, вкажи шлях.\n"
+                "Приклад: `проскануй папку C:\\Users\\User\\Downloads`."
+            )
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
+
+        if _is_antivirus_threats_request(cleaned_message):
+            provider = _extract_antivirus_provider(cleaned_message)
+            arguments: dict[str, Any] = {"limit": 20}
+            if provider:
+                arguments["provider"] = provider
+            result = list_antivirus_threats(**arguments)
+            response = _format_antivirus_threats_report(result)
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
+
+        if _is_antivirus_quick_scan_request(cleaned_message):
+            provider = _extract_antivirus_provider(cleaned_message)
+            arguments: dict[str, Any] = {}
+            if provider:
+                arguments["provider"] = provider
+            detection = detect_antivirus()
+            if not detection.get("available"):
+                response = _deterministic_antivirus_detect_report()
+                self._history.append({"role": "user", "content": cleaned_message})
+                self._history.append({"role": "assistant", "content": response})
+                return response
+
+            result = run_antivirus_quick_scan(**arguments)
+            response = _format_antivirus_scan_report(result)
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
+
+        if (
+            "антивірус" in cleaned_message.casefold()
+            or "antivirus" in cleaned_message.casefold()
+        ):
+            response = _deterministic_antivirus_detect_report()
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
+
         install_request = _extract_install_request(cleaned_message)
         if install_request:
             response = self._queue_pending_action(
@@ -725,12 +1167,45 @@ class MedfarlAgent:
             self._history.append({"role": "assistant", "content": response})
             return response
 
+        uninstall_request = _extract_uninstall_request(cleaned_message)
+        if uninstall_request:
+            response = self._queue_pending_action(
+                tool_name="pip_uninstall_package",
+                arguments=uninstall_request,
+                note="Deterministic maintenance intent: uninstall package.",
+            )
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
+
         create_file_request = _extract_create_file_request(cleaned_message)
         if create_file_request:
             response = self._queue_pending_action(
                 tool_name="create_text_file",
                 arguments=create_file_request,
                 note="Deterministic maintenance intent: create file.",
+            )
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
+
+        append_file_request = _extract_append_file_request(cleaned_message)
+        if append_file_request:
+            response = self._queue_pending_action(
+                tool_name="append_text_file",
+                arguments=append_file_request,
+                note="Deterministic maintenance intent: append file.",
+            )
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
+
+        replace_file_request = _extract_replace_file_request(cleaned_message)
+        if replace_file_request:
+            response = self._queue_pending_action(
+                tool_name="edit_text_file",
+                arguments=replace_file_request,
+                note="Deterministic maintenance intent: replace in file.",
             )
             self._history.append({"role": "user", "content": cleaned_message})
             self._history.append({"role": "assistant", "content": response})
@@ -759,6 +1234,50 @@ class MedfarlAgent:
             self._history.append({"role": "user", "content": cleaned_message})
             self._history.append({"role": "assistant", "content": report})
             return report
+
+        move_junk_request = _extract_move_junk_request(cleaned_message)
+        if move_junk_request:
+            response = self._queue_pending_action(
+                tool_name="move_junk_to_quarantine",
+                arguments=move_junk_request,
+                note="Deterministic maintenance intent: move junk to quarantine.",
+            )
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
+        if any(
+            pattern.search(" ".join(cleaned_message.strip().split()))
+            for pattern in MOVE_JUNK_PATTERNS
+        ):
+            response = (
+                "Для переміщення сміття в quarantine надай конкретні шляхи.\n"
+                "Приклад: `перемісти сміття в quarantine C:\\Users\\User\\AppData\\Local\\Temp\\old.tmp`."
+            )
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
+
+        delete_junk_request = _extract_delete_junk_request(cleaned_message)
+        if delete_junk_request:
+            response = self._queue_pending_action(
+                tool_name="delete_junk_files",
+                arguments=delete_junk_request,
+                note="Deterministic maintenance intent: delete junk.",
+            )
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
+        if any(
+            pattern.search(" ".join(cleaned_message.strip().split()))
+            for pattern in DELETE_JUNK_PATTERNS
+        ):
+            response = (
+                "Для видалення сміття вкажи шляхи до файлів/папок.\n"
+                "Краще спочатку зробити preview: `знайди сміття`."
+            )
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": response})
+            return response
 
         recent_path = _find_recent_windows_path(self._history)
         candidate_path = _extract_windows_path(cleaned_message) or recent_path
@@ -947,6 +1466,8 @@ class MedfarlAgent:
     def _requires_confirmation(self, tool_name: str) -> bool:
         if tool_name == "run_program":
             return settings.require_confirmation_for_exec
+        if tool_name in {"update_antivirus_definitions", "run_antivirus_custom_scan"}:
+            return settings.require_confirmation_for_exec
         if tool_name in {"pip_install_package", "pip_uninstall_package"}:
             return settings.require_confirmation_for_package_changes
         if tool_name in {"move_junk_to_quarantine", "delete_junk_files"}:
@@ -966,6 +1487,8 @@ class MedfarlAgent:
             return "high"
         if tool_name in {
             "run_program",
+            "update_antivirus_definitions",
+            "run_antivirus_custom_scan",
             "pip_install_package",
             "move_junk_to_quarantine",
             "create_directory",
@@ -980,6 +1503,10 @@ class MedfarlAgent:
     def _build_action_summary(self, tool_name: str, arguments: dict[str, Any]) -> str:
         if tool_name == "run_program":
             return "Запуск програми"
+        if tool_name == "update_antivirus_definitions":
+            return "Оновлення антивірусних баз"
+        if tool_name == "run_antivirus_custom_scan":
+            return "Кастомне антивірусне сканування"
         if tool_name == "pip_install_package":
             return "Встановлення Python-пакета"
         if tool_name == "pip_uninstall_package":
@@ -1033,6 +1560,25 @@ class MedfarlAgent:
                 "Що: видалення Python-пакета.",
                 f"Пакет: `{name}`.",
                 "Середовище: поточний інтерпретатор (`sys.executable -m pip`).",
+                f"Ризик: {risk}.",
+            ]
+
+        if tool_name == "update_antivirus_definitions":
+            provider = arguments.get("provider") or "auto"
+            return [
+                "Що: оновлення антивірусних сигнатур.",
+                f"Провайдер: `{provider}`.",
+                "Система спробує оновити бази через структурований antivirus adapter.",
+                f"Ризик: {risk}.",
+            ]
+
+        if tool_name == "run_antivirus_custom_scan":
+            provider = arguments.get("provider") or "auto"
+            scan_path = arguments.get("path", "<missing>")
+            return [
+                "Що: запуск кастомного антивірусного сканування.",
+                f"Провайдер: `{provider}`.",
+                f"Шлях сканування: `{scan_path}`.",
                 f"Ризик: {risk}.",
             ]
 
@@ -1157,8 +1703,62 @@ class MedfarlAgent:
             f"- Action ID: {pending.id}\n"
             f"{plan_preview}\n"
             f"Підтвердити: `approve {pending.id}`\n"
-            f"Скасувати: `cancel {pending.id}`"
+            f"Скасувати: `cancel {pending.id}`\n"
+            "Підтримується лише одна pending-дія одночасно."
         )
+
+    def _history_actions_report(self, limit_raw: Optional[str]) -> str:
+        try:
+            limit = int(limit_raw) if limit_raw else 10
+        except ValueError:
+            limit = 10
+        limit = max(1, min(limit, 30))
+
+        history = read_action_history(limit=limit)
+        if not history:
+            return "Історія дій порожня. Лог ще не містить подій."
+
+        lines = [f"Останні дії (до {limit}):"]
+        for record in reversed(history):
+            event = record.get("event", "unknown")
+            action_id = record.get("action_id", "-")
+            tool = record.get("tool_name", "-")
+            timestamp = str(record.get("timestamp", ""))
+            short_time = timestamp.replace("T", " ")[:19] if timestamp else "?"
+            lines.append(f"- [{short_time}] {event}: {tool} (id={action_id})")
+
+        lines.append(f"Лог: `{settings.action_audit_log_path}`")
+        return "\n".join(lines)
+
+    def _last_action_report(self) -> str:
+        record = read_last_action()
+        if not record:
+            return "Остання дія відсутня: лог порожній."
+
+        event = record.get("event", "unknown")
+        action_id = record.get("action_id", "-")
+        tool = record.get("tool_name", "-")
+        timestamp = str(record.get("timestamp", ""))
+        note = record.get("note")
+        result = record.get("result")
+
+        lines = [
+            "Остання зафіксована дія:",
+            f"- Подія: {event}.",
+            f"- Action ID: {action_id}.",
+            f"- Tool: {tool}.",
+            f"- Час: {timestamp}.",
+        ]
+        if note:
+            lines.append(f"- Note: {note}")
+
+        if isinstance(result, dict):
+            returncode = result.get("returncode")
+            if returncode is not None:
+                lines.append(f"- Return code: {returncode}")
+
+        lines.append(f"Лог: `{settings.action_audit_log_path}`")
+        return "\n".join(lines)
 
     def _approve_pending_action(self, action_id: Optional[str] = None) -> str:
         pending = self.approval.pending
@@ -1193,10 +1793,13 @@ class MedfarlAgent:
         )
 
         self.approval.clear()
+        result_summary = self._execution_result_summary(decoded_result)
         return (
             "Підтверджено. Виконую дію:\n"
             f"- Action ID: {pending.id}\n"
             f"- {pending.summary}\n\n"
+            f"Підсумок: {result_summary}\n"
+            f"Лог: `{settings.action_audit_log_path}`\n\n"
             "Результат:\n"
             f"{tool_result}"
         )
@@ -1227,3 +1830,20 @@ class MedfarlAgent:
             return json.loads(tool_result)
         except json.JSONDecodeError:
             return {"raw": tool_result[:4000]}
+
+    def _execution_result_summary(self, decoded_result: Any) -> str:
+        if isinstance(decoded_result, dict):
+            if decoded_result.get("error"):
+                return f"failed ({decoded_result['error']})"
+
+            returncode = decoded_result.get("returncode")
+            if isinstance(returncode, int):
+                if returncode == 0:
+                    return "success (returncode=0)"
+                return f"failed (returncode={returncode})"
+
+            success_flag = decoded_result.get("success")
+            if isinstance(success_flag, bool):
+                return "success" if success_flag else "failed"
+
+        return "completed"

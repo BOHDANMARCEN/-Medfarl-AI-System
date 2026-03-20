@@ -55,6 +55,36 @@ def log_action_event(
         return
 
 
+def read_action_history(limit: int = 10) -> list[dict[str, Any]]:
+    limit = max(1, min(int(limit), 200))
+    path = Path(settings.action_audit_log_path).expanduser()
+    if not path.is_file():
+        return []
+
+    records: list[dict[str, Any]] = []
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as file:
+            for line in file:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except Exception:
+        return []
+
+    return records[-limit:]
+
+
+def read_last_action() -> dict[str, Any] | None:
+    history = read_action_history(limit=1)
+    if not history:
+        return None
+    return history[-1]
+
+
 def _sanitize_result(result: Any) -> Any:
     try:
         serialized = json.dumps(result, ensure_ascii=False)

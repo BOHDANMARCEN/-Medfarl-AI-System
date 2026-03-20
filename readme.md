@@ -112,6 +112,7 @@ python main.py --model qwen3.5:4b
 python main.py --timeout 240 --model qwen3.5:4b
 python main.py --skip-healthcheck
 python main.py --benchmark-models llama3.2:3b qwen3.5:4b qwen3.5:9b
+python scripts/smoke_maintenance.py
 python main.py
 ```
 
@@ -177,7 +178,15 @@ Use control commands:
 pending
 approve <action_id>
 cancel <action_id>
+history actions
+last action
 ```
+
+### Modes
+
+- **diagnose mode**: read-only diagnostics and summaries (`діагностика`, `процеси`, `мережа`, `логи`).
+- **repair mode**: guarded mutating plans that require confirmation.
+- **dangerous actions**: high-risk operations (for example uninstall package or deleting junk) remain approval-gated and are visible in audit log.
 
 Deterministic maintenance intents currently supported:
 
@@ -185,11 +194,38 @@ Deterministic maintenance intents currently supported:
 - file creation requests (`create_text_file` plan + confirmation)
 - program launch requests (`run_program` plan + confirmation)
 - junk preview requests (`find_junk_files` direct preview)
+- antivirus requests:
+  - `перевір антивірусом`
+  - `онови бази антивіруса`
+  - `проскануй папку ...`
+  - `покажи загрози`
 
 Junk cleanup stage 2 tools are available and still confirmation-gated:
 
 - `move_junk_to_quarantine(paths)`
 - `delete_junk_files(paths, recursive)`
+
+### Live example
+
+```text
+medfarl> встанови пакет rich
+... Action ID: a1b2c3d4 ...
+
+medfarl> approve a1b2c3d4
+... success ...
+
+medfarl> створи файл notes.txt
+... Action ID: e5f6g7h8 ...
+
+medfarl> cancel e5f6g7h8
+... cancelled ...
+
+medfarl> знайди сміття
+... preview list ...
+
+medfarl> move_junk_to_quarantine(...)
+... Action ID: ...
+```
 
 ---
 
