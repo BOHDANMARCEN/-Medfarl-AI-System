@@ -19,6 +19,20 @@ SAFE_COMMANDS: dict[str, list[str]] = {
     "uptime": ["uptime"],
 }
 
+IDLE_PROCESS_NAMES = {"system idle process", "idle"}
+
+
+def _is_usable_network_address(address: str) -> bool:
+    address = str(address)
+    if not address:
+        return False
+    if address.startswith("127.") or address == "::1" or address.startswith("169.254."):
+        return False
+    if re.fullmatch(r"[0-9A-Fa-f]{2}([-:][0-9A-Fa-f]{2}){5}", address):
+        return False
+    return True
+
+
 if platform.system() != "Windows":
     SAFE_COMMANDS.update(
         {
@@ -52,6 +66,63 @@ def build_tools(
             description="Get current hardware state: CPU, RAM, GPU, disk, temperatures, top processes, network. Use this first when diagnosing any issue.",
             parameters={"type": "object", "properties": {}, "required": []},
             fn=lambda: scanner.to_dict(),
+        ),
+        Tool(
+            name="get_disk_summary",
+            description="Summarize disk usage, free space, and high-usage volumes.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "top_n": {
+                        "type": "integer",
+                        "description": "How many disks to include (default 10)",
+                    }
+                },
+                "required": [],
+            },
+            fn=lambda top_n=10: get_disk_summary(scanner, top_n=top_n),
+        ),
+        Tool(
+            name="get_top_processes",
+            description="Show the busiest active processes by CPU and memory. Excludes System Idle Process by default.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "count": {
+                        "type": "integer",
+                        "description": "How many processes to return (default 5)",
+                    },
+                    "include_idle": {
+                        "type": "boolean",
+                        "description": "Include System Idle Process in the result",
+                    },
+                },
+                "required": [],
+            },
+            fn=lambda count=5, include_idle=False: get_top_processes(
+                scanner, count=count, include_idle=include_idle
+            ),
+        ),
+        Tool(
+            name="get_network_summary",
+            description="Summarize active interfaces, IP addresses, and total traffic counters.",
+            parameters={"type": "object", "properties": {}, "required": []},
+            fn=lambda: get_network_summary(scanner),
+        ),
+        Tool(
+            name="get_recent_errors",
+            description="Read recent critical or error-level system events. Uses Windows Event Log on Windows and journalctl on Linux when available.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max number of recent error entries to return (default 10)",
+                    }
+                },
+                "required": [],
+            },
+            fn=lambda limit=10: get_recent_errors(limit=limit),
         ),
         Tool(
             name="get_installed_pip_packages",
@@ -174,6 +245,141 @@ def execute_tool(
     return json.dumps({"error": f"Unknown tool: {name}"}, ensure_ascii=False)
 
 
+def get_disk_summary(
+    scanner: SystemScanner | None = None, top_n: int = 10
+) -> dict[str, Any]:
+    scanner = scanner or SystemScanner()
+    snapshot = scanner.to_dict()
+    disks = sorted(
+        snapshot.get("disks", []), key=lambda disk: disk.get("percent", 0), reverse=True
+    )
+    top_n = max(1, min(int(top_n), 20))
+
+    normalized = []
+    critical = []
+    warning = []
+
+    for disk in disks[:top_n]:
+        mount = disk.get("mountpoint") or disk.get("device") or "disk"
+        entry = {
+            "mountpoint": mount,
+            "device": disk.get("device", ""),
+            "fstype": disk.get("fstype", ""),
+            "total_gb": float(disk.get("total_gb", 0)),
+            "used_gb": float(disk.get("used_gb", 0)),
+            "free_gb": float(disk.get("free_gb", 0)),
+            "percent": float(disk.get("percent", 0)),
+        }
+        normalized.append(entry)
+
+        if entry["percent"] >= 90:
+            critical.append(mount)
+        elif entry["percent"] >= 80:
+            warning.append(mount)
+
+    return {
+        "count": len(normalized),
+        "disks": normalized,
+        "critical_mounts": critical,
+        "warning_mounts": warning,
+    }
+
+
+def get_top_processes(
+    scanner: SystemScanner | None = None,
+    count: int = 5,
+    include_idle: bool = False,
+) -> dict[str, Any]:
+    scanner = scanner or SystemScanner()
+    snapshot = scanner.to_dict()
+    processes = snapshot.get("top_processes", [])
+    count = max(1, min(int(count), 20))
+
+    if not include_idle:
+        processes = [
+            process
+            for process in processes
+            if (process.get("name") or "").casefold() not in IDLE_PROCESS_NAMES
+        ]
+
+    normalized = []
+    for process in processes[:count]:
+        normalized.append(
+            {
+                "pid": int(process.get("pid", 0)),
+                "name": process.get("name", "unknown"),
+                "cpu_percent": float(process.get("cpu_percent", 0)),
+                "memory_mb": round(float(process.get("memory_mb", 0)), 1),
+                "status": process.get("status", "unknown"),
+            }
+        )
+
+    return {
+        "count": len(normalized),
+        "processes": normalized,
+        "include_idle": include_idle,
+    }
+
+
+def get_network_summary(scanner: SystemScanner | None = None) -> dict[str, Any]:
+    scanner = scanner or SystemScanner()
+    snapshot = scanner.to_dict()
+    network = snapshot.get("network", {})
+
+    interfaces = []
+    active_interfaces = []
+    total_sent = 0.0
+    total_recv = 0.0
+
+    for name, details in network.items():
+        addresses = [
+            addr
+            for addr in details.get("addresses", [])
+            if _is_usable_network_address(addr)
+        ]
+        entry = {
+            "name": name,
+            "addresses": addresses,
+            "bytes_sent_mb": float(details.get("bytes_sent_mb", 0)),
+            "bytes_recv_mb": float(details.get("bytes_recv_mb", 0)),
+            "packets_sent": int(details.get("packets_sent", 0)),
+            "packets_recv": int(details.get("packets_recv", 0)),
+        }
+        interfaces.append(entry)
+        total_sent += entry["bytes_sent_mb"]
+        total_recv += entry["bytes_recv_mb"]
+        if addresses:
+            active_interfaces.append(entry)
+
+    return {
+        "interface_count": len(interfaces),
+        "active_interface_count": len(active_interfaces),
+        "active_interfaces": active_interfaces,
+        "interfaces": interfaces,
+        "total_sent_mb": round(total_sent, 2),
+        "total_recv_mb": round(total_recv, 2),
+    }
+
+
+def get_recent_errors(limit: int = 10) -> dict[str, Any]:
+    limit = max(1, min(int(limit), 20))
+    current_platform = platform.system()
+
+    if current_platform == "Windows":
+        return _get_windows_recent_errors(limit)
+
+    if shutil.which("journalctl"):
+        return _get_journal_recent_errors(limit)
+
+    return {
+        "source": "none",
+        "platform": current_platform,
+        "count": 0,
+        "entries": [],
+        "error": "Recent error reader is not available on this platform.",
+    }
+
+
 def _resolve_allowed_path(path: str) -> Path:
     candidate = Path(path).expanduser()
     if not candidate.is_absolute():
@@ -274,3 +480,146 @@ def _ping_host(host: str, count: int = 4) -> dict[str, Any]:
 
     output = result.stdout or result.stderr
     return {"host": host, "output": output[-2000:], "returncode": result.returncode}
+
+
+def _get_windows_recent_errors(limit: int) -> dict[str, Any]:
+    powershell = (
+        shutil.which("powershell")
+        or shutil.which("powershell.exe")
+        or shutil.which("pwsh")
+    )
+    if not powershell:
+        return {
+            "source": "windows_event_log",
+            "platform": "Windows",
+            "count": 0,
+            "entries": [],
+            "error": "PowerShell is not available.",
+        }
+
+    script = (
+        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
+        "$OutputEncoding=[System.Text.Encoding]::UTF8; "
+        "$ErrorActionPreference='Stop'; "
+        "$start=(Get-Date).AddDays(-1); "
+        f"$events=Get-WinEvent -FilterHashtable @{{LogName='System'; Level=1,2; StartTime=$start}} -MaxEvents {max(limit * 4, 20)} | "
+        f"Select-Object -First {limit} TimeCreated, Id, ProviderName, LevelDisplayName, Message; "
+        "$events | ConvertTo-Json -Depth 3 -Compress"
+    )
+
+    try:
+        result = subprocess.run(
+            [powershell, "-NoProfile", "-Command", script],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=25,
+            check=False,
+        )
+    except Exception as exc:
+        return {
+            "source": "windows_event_log",
+            "platform": "Windows",
+            "count": 0,
+            "entries": [],
+            "error": str(exc),
+        }
+
+    if result.returncode != 0:
+        return {
+            "source": "windows_event_log",
+            "platform": "Windows",
+            "count": 0,
+            "entries": [],
+            "error": result.stderr.strip() or "Failed to query Windows Event Log.",
+        }
+
+    payload = result.stdout.strip()
+    if not payload or payload == "null":
+        return {
+            "source": "windows_event_log",
+            "platform": "Windows",
+            "count": 0,
+            "entries": [],
+        }
+
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError:
+        return {
+            "source": "windows_event_log",
+            "platform": "Windows",
+            "count": 0,
+            "entries": [],
+            "error": "Windows Event Log returned invalid JSON.",
+        }
+
+    entries = parsed if isinstance(parsed, list) else [parsed]
+    normalized = []
+    for entry in entries[:limit]:
+        message = " ".join(str(entry.get("Message", "")).split())
+        normalized.append(
+            {
+                "time_created": str(entry.get("TimeCreated", "")),
+                "id": entry.get("Id"),
+                "provider": entry.get("ProviderName", ""),
+                "level": entry.get("LevelDisplayName", ""),
+                "message": message[:240],
+            }
+        )
+
+    return {
+        "source": "windows_event_log",
+        "platform": "Windows",
+        "count": len(normalized),
+        "entries": normalized,
+    }
+
+
+def _get_journal_recent_errors(limit: int) -> dict[str, Any]:
+    try:
+        result = subprocess.run(
+            [
+                "journalctl",
+                "-p",
+                "3",
+                "-n",
+                str(limit),
+                "--no-pager",
+                "--output",
+                "short-iso",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except Exception as exc:
+        return {
+            "source": "journalctl",
+            "platform": platform.system(),
+            "count": 0,
+            "entries": [],
+            "error": str(exc),
+        }
+
+    if result.returncode != 0:
+        return {
+            "source": "journalctl",
+            "platform": platform.system(),
+            "count": 0,
+            "entries": [],
+            "error": result.stderr.strip() or "Failed to query journalctl.",
+        }
+
+    entries = []
+    for line in result.stdout.strip().splitlines()[:limit]:
+        entries.append({"message": line[:240]})
+
+    return {
+        "source": "journalctl",
+        "platform": platform.system(),
+        "count": len(entries),
+        "entries": entries,
+    }

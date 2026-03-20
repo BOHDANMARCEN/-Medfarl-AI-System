@@ -131,7 +131,7 @@ You will see the banner and a `medfarl>` prompt. Type any diagnostic question or
 The default UX is optimized for a short, guided first interaction.
 
 - `привіт` returns a clear next-step menu (overall health, processes, disks, network, logs).
-- Very short intents are normalized before LLM reasoning:
+- Very short intents are normalized into deterministic actions before LLM reasoning:
   - `діагностикою ПК` → `Зроби загальну діагностику ПК`
   - `процеси` → `Покажи найважчі процеси`
   - `мережа` → `Перевір стан мережі`
@@ -139,8 +139,8 @@ The default UX is optimized for a short, guided first interaction.
   - `логи` → `Покажи помилки в системних логах`
 - Ambiguous short inputs trigger a clarification prompt instead of a low-quality guess.
 
-For `діагностика ПК`, the agent runs a deterministic local flow (snapshot + software summary)
-and returns a short PC Doctor-style report without chatty detours.
+For `діагностика ПК`, `процеси`, `диски`, `мережа`, and `логи`, the agent runs
+deterministic local flows and returns short PC Doctor-style reports without chatty detours.
 
 ---
 
@@ -158,6 +158,10 @@ medfarl> діагностикою ПК
 - Processes: ...
 - Services & packages: ...
 - Network: ...
+
+medfarl> процеси
+Добре, показую найважчі процеси зараз:
+- ...
 ```
 
 Typical internal flow for that second command:
@@ -295,6 +299,10 @@ Services come from `systemctl list-units --type=service --all`.
 Each tool is a `Tool` dataclass with a name, description (the LLM reads this when
 deciding what to call), a JSON Schema for parameters, and a Python callable.
 
+The tool layer now includes narrower summaries for disks, processes, network state, and
+recent system errors so the agent does not have to infer everything from one large
+bootstrap snapshot.
+
 **Safe command allowlist.** `SAFE_COMMANDS` maps string keys to hardcoded `argv` lists.
 The model passes a key (e.g. `df_h`), not a raw command string. This prevents prompt
 injection via command arguments entirely.
@@ -313,6 +321,10 @@ before passing it to `subprocess.run`.
 | Tool | Arguments | What it does |
 |---|---|---|
 | `get_system_snapshot` | — | CPU, RAM, disk, GPU, temps, network, top 5 processes |
+| `get_disk_summary` | `top_n` | Disk usage summary with high-usage volumes |
+| `get_top_processes` | `count`, `include_idle` | Busiest active processes by CPU and memory |
+| `get_network_summary` | — | Active interfaces, IP addresses, and traffic totals |
+| `get_recent_errors` | `limit` | Recent critical/error events from Windows Event Log or journalctl |
 | `get_installed_pip_packages` | — | All pip packages in active environment |
 | `get_pip_outdated` | — | Outdated pip packages (slow, ~15s) |
 | `get_system_packages_summary` | — | Package manager name + failed systemd services |
@@ -371,8 +383,9 @@ unavailable. System package detection requires Homebrew and is not yet implement
 
 **Partial: Windows**
 
-Basic CPU, RAM, disk, network, pip tools, and `ping_host` work. Linux-only safe commands
-and systemd tools return errors or empty results gracefully.
+Basic CPU, RAM, disk, network, pip tools, `ping_host`, and `get_recent_errors` work.
+Recent error reads use Windows Event Log through PowerShell. Linux-only safe commands and
+systemd tools return errors or empty results gracefully.
 
 NVIDIA GPU support requires `pynvml` and a working NVIDIA driver on any platform.
 If `pynvml` is not installed or no NVIDIA GPU is present, the GPU section of the

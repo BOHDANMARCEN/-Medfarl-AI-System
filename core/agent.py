@@ -8,7 +8,15 @@ from config import settings
 from core.lib_inspector import LibInspector
 from core.llm_client import LLMClient
 from core.system_scanner import SystemScanner
-from tools.tools import build_tools, execute_tool, tool_schemas
+from tools.tools import (
+    build_tools,
+    execute_tool,
+    get_disk_summary,
+    get_network_summary,
+    get_recent_errors,
+    get_top_processes,
+    tool_schemas,
+)
 
 
 SYSTEM_PROMPT = """\
@@ -50,16 +58,22 @@ GREETING_PATTERN = re.compile(
 )
 
 DIAGNOSTIC_INTENT = "Зроби загальну діагностику ПК"
+PROCESS_INTENT = "Покажи найважчі процеси"
+DISK_INTENT = "Перевір диски і вільне місце"
+NETWORK_INTENT = "Перевір стан мережі"
+LOGS_INTENT = "Покажи помилки в системних логах"
 
 INTENT_NORMALIZATION: dict[str, str] = {
     "діагностика": DIAGNOSTIC_INTENT,
     "діагностика пк": DIAGNOSTIC_INTENT,
     "діагностикою пк": DIAGNOSTIC_INTENT,
-    "процеси": "Покажи найважчі процеси",
-    "мережа": "Перевір стан мережі",
-    "диск": "Перевір диски і вільне місце",
-    "диски": "Перевір диски і вільне місце",
-    "логи": "Покажи помилки в системних логах",
+    "процеси": PROCESS_INTENT,
+    "процес": PROCESS_INTENT,
+    "мережа": NETWORK_INTENT,
+    "диск": DISK_INTENT,
+    "диски": DISK_INTENT,
+    "лог": LOGS_INTENT,
+    "логи": LOGS_INTENT,
 }
 
 SHORT_ACTION_VERBS = {
@@ -184,17 +198,34 @@ def _format_network_summary(network: dict[str, dict]) -> str:
     return f"активні інтерфейси: {preview}; трафік {sent_mb:.1f}/{recv_mb:.1f} MB"
 
 
+def _format_recent_errors_summary(errors: dict[str, Any]) -> str:
+    entries = errors.get("entries", [])
+    if not entries:
+        if errors.get("error"):
+            return f"читання помилок недоступне: {errors['error']}"
+        return "критичних помилок не виявлено"
+
+    fragments = []
+    for entry in entries[:2]:
+        provider = entry.get("provider") or entry.get("level") or "source"
+        message = entry.get("message") or entry.get("Message") or ""
+        cleaned = " ".join(str(message).split())[:120]
+        fragments.append(f"{provider}: {cleaned}")
+    return "; ".join(fragments)
+
+
 def _deterministic_diagnostic_report(
     scanner: SystemScanner, inspector: LibInspector
 ) -> str:
     snapshot = scanner.to_dict()
     software = inspector.summary_dict()
+    disk_summary = get_disk_summary(scanner, top_n=3)
+    process_summary = get_top_processes(scanner, count=3)
+    network_summary = get_network_summary(scanner)
+    recent_errors = get_recent_errors(limit=3)
 
     cpu = snapshot.get("cpu", {})
     memory = snapshot.get("memory", {})
-    disks = snapshot.get("disks", [])
-    processes = snapshot.get("top_processes", [])
-    network = snapshot.get("network", {})
 
     failed_services = software.get("failed_services", [])
     failed_services_text = (
@@ -207,11 +238,88 @@ def _deterministic_diagnostic_report(
         "Добре, запускаю базову діагностику системи.",
         f"- CPU: {cpu.get('model', 'невідомо')}, {cpu.get('usage_percent', 0):.1f}% навантаження, {cpu.get('cores_logical', '?')} логічних ядер.",
         f"- RAM: {memory.get('used_gb', 0):.1f}/{memory.get('total_gb', 0):.1f} GB ({memory.get('percent', 0):.1f}%), swap {memory.get('swap_used_gb', 0):.1f}/{memory.get('swap_total_gb', 0):.1f} GB.",
-        f"- Disk: {_format_disk_summary(disks)}.",
-        f"- Processes: {_format_process_summary(processes)}.",
-        f"- Services & packages: pip {software.get('pip_packages_count', 0)}, system packages {software.get('system_packages_count', 0)}, failed services: {failed_services_text}.",
-        f"- Network: {_format_network_summary(network)}.",
+        f"- Disk: {_format_disk_summary(disk_summary.get('disks', []))}.",
+        f"- Processes: {_format_process_summary(process_summary.get('processes', []))}.",
+        f"- Services, packages & errors: pip {software.get('pip_packages_count', 0)}, system packages {software.get('system_packages_count', 0)}, failed services: {failed_services_text}; recent errors: {_format_recent_errors_summary(recent_errors)}.",
+        f"- Network: {_format_network_summary({entry['name']: entry for entry in network_summary.get('active_interfaces', [])}) if network_summary.get('active_interfaces') else _format_network_summary({})}.",
     ]
+    return "\n".join(lines)
+
+
+def _deterministic_process_report(scanner: SystemScanner) -> str:
+    summary = get_top_processes(scanner, count=5)
+    processes = summary.get("processes", [])
+    if not processes:
+        return "Не бачу активних процесів із помітним навантаженням прямо зараз."
+
+    lines = ["Добре, показую найважчі процеси зараз:"]
+    for process in processes:
+        lines.append(
+            f"- {process['name']} (PID {process['pid']}): {process['cpu_percent']:.1f}% CPU, {process['memory_mb']:.1f} MB RAM, статус {process['status']}."
+        )
+    return "\n".join(lines)
+
+
+def _deterministic_disk_report(scanner: SystemScanner) -> str:
+    summary = get_disk_summary(scanner, top_n=6)
+    disks = summary.get("disks", [])
+    if not disks:
+        return "Не вдалося отримати дані про диски."
+
+    lines = ["Добре, перевіряю диски і вільне місце:"]
+    for disk in disks:
+        mount = disk.get("mountpoint") or disk.get("device") or "disk"
+        severity = (
+            "критично"
+            if disk["percent"] >= 90
+            else "увага"
+            if disk["percent"] >= 80
+            else "норма"
+        )
+        lines.append(
+            f"- {mount}: {disk['used_gb']:.0f}/{disk['total_gb']:.0f} GB, {disk['percent']:.1f}% зайнято, вільно {disk['free_gb']:.0f} GB ({severity})."
+        )
+    return "\n".join(lines)
+
+
+def _deterministic_network_report(scanner: SystemScanner) -> str:
+    summary = get_network_summary(scanner)
+    active_interfaces = summary.get("active_interfaces", [])
+    if not active_interfaces:
+        return "Добре, перевірив мережу. Активних мережевих інтерфейсів із зовнішніми адресами зараз не видно."
+
+    lines = [
+        "Добре, перевірив стан мережі.",
+        f"- Загальний трафік: {summary.get('total_sent_mb', 0):.1f} MB відправлено, {summary.get('total_recv_mb', 0):.1f} MB отримано.",
+    ]
+    for interface in active_interfaces[:4]:
+        addresses = ", ".join(interface.get("addresses", [])[:2]) or "без адрес"
+        lines.append(
+            f"- {interface['name']}: адреси {addresses}, трафік {interface['bytes_sent_mb']:.1f}/{interface['bytes_recv_mb']:.1f} MB."
+        )
+    return "\n".join(lines)
+
+
+def _deterministic_logs_report(limit: int = 5) -> str:
+    errors = get_recent_errors(limit=limit)
+    entries = errors.get("entries", [])
+    if not entries:
+        if errors.get("error"):
+            return f"Не вдалося прочитати системні помилки: {errors['error']}"
+        return "Останніх критичних помилок у доступних системних логах не виявлено."
+
+    lines = ["Добре, показую останні системні помилки:"]
+    for entry in entries[:limit]:
+        provider = (
+            entry.get("provider")
+            or entry.get("level")
+            or errors.get("source", "source")
+        )
+        event_id = f" #{entry['id']}" if entry.get("id") else ""
+        message = " ".join(
+            str(entry.get("message") or entry.get("Message") or "").split()
+        )[:160]
+        lines.append(f"- {provider}{event_id}: {message}")
     return "\n".join(lines)
 
 
@@ -255,6 +363,30 @@ class MedfarlAgent:
 
         if normalized_message == DIAGNOSTIC_INTENT:
             report = _deterministic_diagnostic_report(self.scanner, self.inspector)
+            self._history.append({"role": "user", "content": normalized_message})
+            self._history.append({"role": "assistant", "content": report})
+            return report
+
+        if normalized_message == PROCESS_INTENT:
+            report = _deterministic_process_report(self.scanner)
+            self._history.append({"role": "user", "content": normalized_message})
+            self._history.append({"role": "assistant", "content": report})
+            return report
+
+        if normalized_message == DISK_INTENT:
+            report = _deterministic_disk_report(self.scanner)
+            self._history.append({"role": "user", "content": normalized_message})
+            self._history.append({"role": "assistant", "content": report})
+            return report
+
+        if normalized_message == NETWORK_INTENT:
+            report = _deterministic_network_report(self.scanner)
+            self._history.append({"role": "user", "content": normalized_message})
+            self._history.append({"role": "assistant", "content": report})
+            return report
+
+        if normalized_message == LOGS_INTENT:
+            report = _deterministic_logs_report(limit=5)
             self._history.append({"role": "user", "content": normalized_message})
             self._history.append({"role": "assistant", "content": report})
             return report
