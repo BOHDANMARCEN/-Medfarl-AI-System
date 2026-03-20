@@ -108,8 +108,8 @@ pip install -r requirements.txt
 ```bash
 python main.py --healthcheck
 python main.py --list-models
-python main.py --model qwen3.5:4b
-python main.py --timeout 240 --model qwen3.5:4b
+python main.py --model qwen3.5:9b
+python main.py --timeout 240 --model qwen3.5:9b
 python main.py --skip-healthcheck
 python main.py --benchmark-models llama3.2:3b qwen3.5:4b qwen3.5:9b
 python scripts/smoke_maintenance.py
@@ -285,7 +285,7 @@ overridden with an environment variable.
 | Variable | Default | Description |
 |---|---|---|
 | `MEDFARL_LLM_URL` | `http://localhost:11434` | Ollama or any OpenAI-compatible endpoint |
-| `MEDFARL_MODEL` | `qwen3.5:4b` | Model name as Ollama knows it |
+| `MEDFARL_MODEL` | `qwen3.5:9b` | Model name as Ollama knows it |
 | `MEDFARL_TIMEOUT` | `120` | HTTP timeout in seconds for LLM calls |
 | `MEDFARL_MAX_TOOL_STEPS` | `8` | Maximum tool call iterations per user turn |
 | `MEDFARL_ALLOWED_READ_ROOTS` | current workspace | `os.pathsep`-separated roots for file read access |
