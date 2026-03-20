@@ -14,11 +14,13 @@ maintenance actions through guarded tools with explicit approval.
 ## Table of contents
 
 - [Why Medfarl](#why-medfarl)
+- [What Works Now](#what-works-now)
 - [How it works](#how-it-works)
 - [Quick start](#quick-start)
 - [First user flow](#first-user-flow)
 - [Maintenance mode](#maintenance-mode)
 - [Demo](#demo)
+- [Stability checks](#stability-checks)
 - [Configuration](#configuration)
 - [Project structure](#project-structure)
 - [Architecture deep dive](#architecture-deep-dive)
@@ -47,6 +49,18 @@ maintenance tools with approval prompts.
 **Real data before conclusions.** The system prompt instructs the model to always call
 `get_system_snapshot` before diagnosing any unknown issue. It is not allowed to invent
 tool results or guess before reading actual system state.
+
+---
+
+## What Works Now
+
+Current alpha is strongest in three areas:
+
+- `diagnose mode` - deterministic local summaries for overall system state, processes, disks, network, and logs.
+- `repair mode` - approval-gated maintenance plans for packages, file edits, program launch, antivirus tasks, and junk handling.
+- `auditability` - action ids, JSONL audit trail, single pending-action policy, and smoke scripts for regression checks.
+
+This makes the current build useful as a local PC Doctor alpha rather than just a chat wrapper around tools.
 
 ---
 
@@ -112,6 +126,7 @@ python main.py --model qwen3.5:9b
 python main.py --timeout 240 --model qwen3.5:9b
 python main.py --skip-healthcheck
 python main.py --benchmark-models llama3.2:3b qwen3.5:4b qwen3.5:9b
+python scripts/smoke_intents.py
 python scripts/smoke_maintenance.py
 python main.py
 ```
@@ -274,6 +289,21 @@ normalize intent -> deterministic diagnostics -> concise report
 ```
 
 This keeps the first experience practical: less small talk, more actual diagnostics.
+
+---
+
+## Stability checks
+
+Recommended alpha regression commands:
+
+```bash
+python main.py --healthcheck
+python scripts/smoke_intents.py
+python scripts/smoke_maintenance.py
+```
+
+- `scripts/smoke_intents.py` checks guided diagnose and repair intents.
+- `scripts/smoke_maintenance.py` checks pending approvals, wrong-id refusals, junk lifecycle, audit/history, and antivirus routing.
 
 ---
 

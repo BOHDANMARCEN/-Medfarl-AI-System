@@ -142,7 +142,7 @@ class LLMClient:
             tool_response = httpx.post(
                 f"{self.base_url}/v1/chat/completions",
                 json=tool_payload,
-                timeout=min(self.timeout, 60),
+                timeout=max(60, min(self.timeout, 180)),
             )
         except httpx.HTTPError as exc:
             result["error"] = f"Tool support check failed for '{self.model}': {exc}"
