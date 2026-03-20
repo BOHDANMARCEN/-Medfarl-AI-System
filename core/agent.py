@@ -34,7 +34,7 @@ Diagnostic rules:
 
 Formatting rules:
 - Keep answers short by default.
-- For summaries, use 2-5 bullets.
+- For summary mode, use 4-6 bullets in this order when possible: CPU, RAM, Disk, Processes, Services, Network.
 - Mention only observations that are supported by the data.
 - Do not exaggerate risks.
 
@@ -49,6 +49,34 @@ GREETING_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+DIAGNOSTIC_INTENT = "Зроби загальну діагностику ПК"
+
+INTENT_NORMALIZATION: dict[str, str] = {
+    "діагностика": DIAGNOSTIC_INTENT,
+    "діагностика пк": DIAGNOSTIC_INTENT,
+    "діагностикою пк": DIAGNOSTIC_INTENT,
+    "процеси": "Покажи найважчі процеси",
+    "мережа": "Перевір стан мережі",
+    "диск": "Перевір диски і вільне місце",
+    "диски": "Перевір диски і вільне місце",
+    "логи": "Покажи помилки в системних логах",
+}
+
+SHORT_ACTION_VERBS = {
+    "перевір",
+    "покажи",
+    "зроби",
+    "проаналізуй",
+    "діагностуй",
+    "check",
+    "show",
+    "analyze",
+    "diagnose",
+    "проверь",
+    "покажи",
+    "сделай",
+}
+
 
 def _greeting_reply(message: str) -> Optional[str]:
     if not GREETING_PATTERN.match(message):
@@ -56,10 +84,135 @@ def _greeting_reply(message: str) -> Optional[str]:
 
     lowered = message.casefold()
     if any(token in lowered for token in ["привіт", "вітаю", "доброго", "добрий"]):
-        return "Привіт! Я можу допомогти з діагностикою ПК, логами, процесами, дисками або мережею."
+        return (
+            "Привіт! Що саме перевірити: загальний стан системи, процеси, "
+            "диски, мережу чи логи?"
+        )
     if "привет" in lowered:
-        return "Привет! Я могу помочь с диагностикой ПК, логами, процессами, дисками или сетью."
-    return "Hi! I can help with PC diagnostics, logs, processes, disks, or networking."
+        return (
+            "Привет! Что именно проверить: общее состояние системы, процессы, "
+            "диски, сеть или логи?"
+        )
+    return "Hi! What should I check first: overall health, processes, disks, network, or logs?"
+
+
+def _normalize_intent(message: str) -> str:
+    compact = " ".join(message.strip().split()).casefold()
+    return INTENT_NORMALIZATION.get(compact, message.strip())
+
+
+def _is_short_ambiguous_message(message: str) -> bool:
+    compact = message.strip()
+    if not compact:
+        return False
+    words = re.findall(r"[A-Za-zА-Яа-яІіЇїЄєҐґ0-9]+", compact.casefold())
+    if not words or len(words) > 3:
+        return False
+    if any(word in SHORT_ACTION_VERBS for word in words):
+        return False
+    return True
+
+
+def _ambiguous_input_reply() -> str:
+    return (
+        "Уточни, будь ласка, запит. Можеш написати один із варіантів:\n"
+        "- діагностика ПК\n"
+        "- процеси\n"
+        "- диски\n"
+        "- мережа\n"
+        "- логи"
+    )
+
+
+def _looks_mixed_language(text: str) -> bool:
+    words = re.findall(r"[A-Za-zА-Яа-яІіЇїЄєҐґ]{3,}", text)
+    latin_words = [word for word in words if re.fullmatch(r"[A-Za-z]{3,}", word)]
+    cyrillic_words = [
+        word for word in words if re.fullmatch(r"[А-Яа-яІіЇїЄєҐґ]{3,}", word)
+    ]
+    if len(latin_words) < 3 or len(cyrillic_words) < 3:
+        return False
+    smaller = min(len(latin_words), len(cyrillic_words))
+    larger = max(len(latin_words), len(cyrillic_words))
+    return (smaller / larger) >= 0.35
+
+
+def _format_disk_summary(disks: list[dict]) -> str:
+    if not disks:
+        return "дані про диски недоступні"
+    by_usage = sorted(disks, key=lambda disk: disk.get("percent", 0), reverse=True)
+    top = by_usage[:3]
+    fragments = []
+    for disk in top:
+        mount = disk.get("mountpoint") or disk.get("device") or "disk"
+        percent = float(disk.get("percent", 0))
+        free_gb = float(disk.get("free_gb", 0))
+        fragments.append(f"{mount} {percent:.1f}% (вільно {free_gb:.0f} GB)")
+    return "; ".join(fragments)
+
+
+def _format_process_summary(processes: list[dict]) -> str:
+    if not processes:
+        return "дані про процеси недоступні"
+    top = processes[:3]
+    return ", ".join(
+        f"{proc.get('name', 'unknown')} ({float(proc.get('cpu_percent', 0)):.1f}% CPU)"
+        for proc in top
+    )
+
+
+def _format_network_summary(network: dict[str, dict]) -> str:
+    if not network:
+        return "інтерфейси не знайдено"
+    active = [
+        name
+        for name, details in network.items()
+        if any(
+            addr and not str(addr).startswith("127.") and str(addr) != "::1"
+            for addr in details.get("addresses", [])
+        )
+    ]
+    sent_mb = sum(
+        float(details.get("bytes_sent_mb", 0)) for details in network.values()
+    )
+    recv_mb = sum(
+        float(details.get("bytes_recv_mb", 0)) for details in network.values()
+    )
+    if not active:
+        return f"активні адреси не виявлені, трафік {sent_mb:.1f}/{recv_mb:.1f} MB"
+    preview = ", ".join(active[:3])
+    return f"активні інтерфейси: {preview}; трафік {sent_mb:.1f}/{recv_mb:.1f} MB"
+
+
+def _deterministic_diagnostic_report(
+    scanner: SystemScanner, inspector: LibInspector
+) -> str:
+    snapshot = scanner.to_dict()
+    software = inspector.summary_dict()
+
+    cpu = snapshot.get("cpu", {})
+    memory = snapshot.get("memory", {})
+    disks = snapshot.get("disks", [])
+    processes = snapshot.get("top_processes", [])
+    network = snapshot.get("network", {})
+
+    failed_services = software.get("failed_services", [])
+    failed_services_text = (
+        ", ".join(failed_services[:3])
+        if failed_services
+        else "критичних збоїв не виявлено"
+    )
+
+    lines = [
+        "Добре, запускаю базову діагностику системи.",
+        f"- CPU: {cpu.get('model', 'невідомо')}, {cpu.get('usage_percent', 0):.1f}% навантаження, {cpu.get('cores_logical', '?')} логічних ядер.",
+        f"- RAM: {memory.get('used_gb', 0):.1f}/{memory.get('total_gb', 0):.1f} GB ({memory.get('percent', 0):.1f}%), swap {memory.get('swap_used_gb', 0):.1f}/{memory.get('swap_total_gb', 0):.1f} GB.",
+        f"- Disk: {_format_disk_summary(disks)}.",
+        f"- Processes: {_format_process_summary(processes)}.",
+        f"- Services & packages: pip {software.get('pip_packages_count', 0)}, system packages {software.get('system_packages_count', 0)}, failed services: {failed_services_text}.",
+        f"- Network: {_format_network_summary(network)}.",
+    ]
+    return "\n".join(lines)
 
 
 def _build_snapshot_context(
@@ -91,14 +244,32 @@ class MedfarlAgent:
         self._bootstrap()
 
     def handle_user_message(self, message: str) -> str:
-        greeting = _greeting_reply(message)
+        cleaned_message = message.strip()
+        greeting = _greeting_reply(cleaned_message)
         if greeting is not None:
-            self._history.append({"role": "user", "content": message})
+            self._history.append({"role": "user", "content": cleaned_message})
             self._history.append({"role": "assistant", "content": greeting})
             return greeting
 
-        self._history.append({"role": "user", "content": message})
+        normalized_message = _normalize_intent(cleaned_message)
+
+        if normalized_message == DIAGNOSTIC_INTENT:
+            report = _deterministic_diagnostic_report(self.scanner, self.inspector)
+            self._history.append({"role": "user", "content": normalized_message})
+            self._history.append({"role": "assistant", "content": report})
+            return report
+
+        if normalized_message == cleaned_message and _is_short_ambiguous_message(
+            cleaned_message
+        ):
+            clarification = _ambiguous_input_reply()
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": clarification})
+            return clarification
+
+        self._history.append({"role": "user", "content": normalized_message})
         reply = self._run_agent_loop()
+        reply = self._postprocess_reply(reply)
         self._history.append({"role": "assistant", "content": reply})
         return reply
 
@@ -173,3 +344,29 @@ class MedfarlAgent:
 
     def _full_messages(self) -> List[Dict[str, Any]]:
         return [{"role": "system", "content": SYSTEM_PROMPT}, *self._history]
+
+    def _postprocess_reply(self, reply: str) -> str:
+        if not self.client.model.startswith("llama3.2"):
+            return reply
+        if not _looks_mixed_language(reply):
+            return reply
+
+        rewrite_messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Перефразуй текст українською мовою. "
+                    "Не додавай нових фактів, не змінюй сенс, прибери змішування мов. "
+                    "Залиши короткий формат."
+                ),
+            },
+            {"role": "user", "content": reply},
+        ]
+
+        try:
+            rewritten = self.client.chat(messages=rewrite_messages, tools=None)
+        except Exception:
+            return reply
+
+        candidate = rewritten.get("assistant_message", {}).get("content", "").strip()
+        return candidate or reply

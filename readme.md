@@ -15,6 +15,8 @@ logs, and services — then explains what it finds in plain language.
 - [Why Medfarl](#why-medfarl)
 - [How it works](#how-it-works)
 - [Quick start](#quick-start)
+- [First user flow](#first-user-flow)
+- [Demo](#demo)
 - [Configuration](#configuration)
 - [Project structure](#project-structure)
 - [Architecture deep dive](#architecture-deep-dive)
@@ -121,6 +123,50 @@ Ollama is not ready.
 
 You will see the banner and a `medfarl>` prompt. Type any diagnostic question or
 `exit` / `quit` / `q` to quit.
+
+---
+
+## First user flow
+
+The default UX is optimized for a short, guided first interaction.
+
+- `привіт` returns a clear next-step menu (overall health, processes, disks, network, logs).
+- Very short intents are normalized before LLM reasoning:
+  - `діагностикою ПК` → `Зроби загальну діагностику ПК`
+  - `процеси` → `Покажи найважчі процеси`
+  - `мережа` → `Перевір стан мережі`
+  - `диск` / `диски` → `Перевір диски і вільне місце`
+  - `логи` → `Покажи помилки в системних логах`
+- Ambiguous short inputs trigger a clarification prompt instead of a low-quality guess.
+
+For `діагностика ПК`, the agent runs a deterministic local flow (snapshot + software summary)
+and returns a short PC Doctor-style report without chatty detours.
+
+---
+
+## Demo
+
+```text
+medfarl> привіт
+Привіт! Що саме перевірити: загальний стан системи, процеси, диски, мережу чи логи?
+
+medfarl> діагностикою ПК
+Добре, запускаю базову діагностику системи.
+- CPU: ...
+- RAM: ...
+- Disk: ...
+- Processes: ...
+- Services & packages: ...
+- Network: ...
+```
+
+Typical internal flow for that second command:
+
+```text
+normalize intent -> deterministic diagnostics -> concise report
+```
+
+This keeps the first experience practical: less small talk, more actual diagnostics.
 
 ---
 
