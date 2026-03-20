@@ -13,6 +13,7 @@ from config import settings
 from core.lib_inspector import LibInspector
 from core.llm_client import Tool
 from core.system_scanner import SystemScanner
+from tools.maintenance_tools import build_maintenance_tools
 
 
 SAFE_COMMANDS: dict[str, list[str]] = {
@@ -60,7 +61,7 @@ def build_tools(
     scanner = scanner or SystemScanner()
     inspector = inspector or LibInspector()
 
-    return [
+    base_tools = [
         Tool(
             name="get_system_snapshot",
             description="Get current hardware state: CPU, RAM, GPU, disk, temperatures, top processes, network. Use this first when diagnosing any issue.",
@@ -215,6 +216,8 @@ def build_tools(
             fn=_ping_host,
         ),
     ]
+
+    return [*base_tools, *build_maintenance_tools()]
 
 
 def tool_schemas(tool_registry: list[Tool] | None = None) -> list[dict[str, Any]]:

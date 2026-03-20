@@ -5,8 +5,9 @@
 > Deep local diagnostics. Zero cloud. All analysis stays on your machine.
 
 Medfarl is a terminal-based diagnostic assistant that runs a local LLM as an agent with
-controlled, read-only tool access to your system. It inspects hardware, processes, packages,
-logs, and services — then explains what it finds in plain language.
+controlled tool access to your system. It inspects hardware, processes, packages,
+logs, and services — then explains what it finds in plain language. It can also run
+maintenance actions through guarded tools with explicit approval.
 
 ---
 
@@ -39,7 +40,8 @@ OpenAI-compatible local backend). No data leaves the host.
 
 **Controlled tool access.** The agent can only call explicitly registered tools. Shell
 execution is limited to a hardcoded allowlist of safe diagnostic commands. No arbitrary
-`subprocess.run(user_input)`. No write or delete operations.
+`subprocess.run(user_input)`. Mutating actions are available only through dedicated
+maintenance tools with approval prompts.
 
 **Real data before conclusions.** The system prompt instructs the model to always call
 `get_system_snapshot` before diagnosing any unknown issue. It is not allowed to invent
@@ -66,6 +68,10 @@ user message
 
 The loop runs for at most `max_tool_steps` iterations (default 8) as a safety cap.
 Conversation history is preserved across turns within a session.
+
+For mutating tools (run program, install/uninstall pip packages, edit files), Medfarl
+creates a pending action plan and waits for `approve` or `cancel` instead of executing
+immediately.
 
 ---
 
@@ -123,6 +129,14 @@ Ollama is not ready.
 
 You will see the banner and a `medfarl>` prompt. Type any diagnostic question or
 `exit` / `quit` / `q` to quit.
+
+When Medfarl plans a mutating action, it pauses and asks for explicit confirmation.
+Use:
+
+```text
+approve
+cancel
+```
 
 ---
 
@@ -186,6 +200,12 @@ overridden with an environment variable.
 | `MEDFARL_TIMEOUT` | `120` | HTTP timeout in seconds for LLM calls |
 | `MEDFARL_MAX_TOOL_STEPS` | `8` | Maximum tool call iterations per user turn |
 | `MEDFARL_ALLOWED_READ_ROOTS` | current workspace | `os.pathsep`-separated roots for file read access |
+| `MEDFARL_ALLOWED_EDIT_ROOTS` | current workspace | Roots where text files/directories can be created or edited |
+| `MEDFARL_ALLOWED_EXEC_ROOTS` | current workspace | Roots where `run_program` is allowed to execute files |
+| `MEDFARL_CONFIRM_EXEC` | `1` | Require approval before `run_program` |
+| `MEDFARL_CONFIRM_PACKAGE_CHANGES` | `1` | Require approval before pip install/uninstall |
+| `MEDFARL_CONFIRM_FILE_EDITS` | `1` | Require approval before create/write/edit file actions |
+| `MEDFARL_CONFIRM_DELETE` | `1` | Reserved for delete actions (future cleanup stage) |
 
 ### Using a different backend
 
@@ -213,11 +233,17 @@ medfarl-ai-system/
 ├── requirements.txt
 ├── core/
 │   ├── agent.py              MedfarlAgent — orchestrator, history, bootstrap
+│   ├── approval.py           pending action memory and approval state
+│   ├── action_guard.py       allowed-root and path guardrails for mutating actions
+│   ├── program_runner.py     guarded executable launcher
+│   ├── package_manager.py    controlled pip operations via current interpreter
+│   ├── file_ops.py           guarded file create/write/edit helpers + junk preview
 │   ├── llm_client.py         LLMClient + Tool dataclass
 │   ├── system_scanner.py     SystemScanner — hardware sensors via psutil + pynvml
 │   └── lib_inspector.py      LibInspector — pip, packages, services
 ├── tools/
-│   └── tools.py              Tool registry, schemas, implementations, safe allowlist
+│   ├── tools.py              Base diagnostics tools and helper functions
+│   └── maintenance_tools.py  Mutating maintenance tools (approval-gated)
 └── ui/
     └── cli.py                Terminal banner and prompt helpers
 ```
@@ -303,6 +329,10 @@ The tool layer now includes narrower summaries for disks, processes, network sta
 recent system errors so the agent does not have to infer everything from one large
 bootstrap snapshot.
 
+Maintenance tools are split into a dedicated module and merged into the registry. The
+agent marks mutating calls as pending plans and asks for explicit confirmation before
+execution.
+
 **Safe command allowlist.** `SAFE_COMMANDS` maps string keys to hardcoded `argv` lists.
 The model passes a key (e.g. `df_h`), not a raw command string. This prevents prompt
 injection via command arguments entirely.
@@ -329,6 +359,17 @@ before passing it to `subprocess.run`.
 | `get_pip_outdated` | — | Outdated pip packages (slow, ~15s) |
 | `get_system_packages_summary` | — | Package manager name + failed systemd services |
 | `get_failed_services` | — | List of failed systemd service names |
+| `run_program` | `path`, `args`, `cwd`, `timeout` | Run approved `.exe` from allowed execution roots (approval-gated) |
+| `pip_install_package` | `name`, `version`, `upgrade` | Install package via `sys.executable -m pip` (approval-gated) |
+| `pip_uninstall_package` | `name` | Uninstall package via `sys.executable -m pip` (approval-gated) |
+| `pip_check` | — | Report package dependency conflicts |
+| `pip_freeze` | — | Output installed package versions |
+| `find_junk_files` | `scope`, `older_than_days`, `limit` | Preview temp/cache-like files and estimate cleanup impact |
+| `create_directory` | `path` | Create directory in allowed edit roots (approval-gated) |
+| `create_text_file` | `path`, `content` | Create text file in allowed edit roots (approval-gated) |
+| `write_text_file` | `path`, `content`, `overwrite` | Write file with backup-aware behavior (approval-gated) |
+| `append_text_file` | `path`, `content` | Append text with backup-aware behavior (approval-gated) |
+| `edit_text_file` | `path`, `find_text`, `replace_text` | Single replace with backup creation (approval-gated) |
 | `read_file` | `path` | Read a text file within allowed roots |
 | `list_directory` | `path` | List contents of a directory within allowed roots |
 | `run_safe_command` | `command` (key) | Run a pre-approved command by its allowlist key |
@@ -350,15 +391,19 @@ before passing it to `subprocess.run`.
 
 ## Safety model
 
-Medfarl is intentionally a diagnostic tool, not an automation platform.
+Medfarl is intentionally a controlled diagnostics + maintenance assistant, not an
+unrestricted automation platform.
 
 - No arbitrary shell execution. The `run_safe_command` tool only accepts keys from a
   hardcoded dictionary of safe read-only commands, not raw strings.
-- No write or delete tools. There are no tools that modify files, install packages,
-  change configuration, kill processes, or restart services.
+- Mutating actions are approval-gated. Tools such as `run_program`, `pip_install_package`,
+  `pip_uninstall_package`, and file edit tools are never executed immediately when the
+  model requests them; the agent creates a pending action and asks for `approve`.
 - Path access is bounded. `read_file` and `list_directory` are limited to roots defined
   in `MEDFARL_ALLOWED_READ_ROOTS`. By default this is the current workspace so the app
   works out of the box on Windows, macOS, and Linux.
+- Execution and edit paths are also bounded via `MEDFARL_ALLOWED_EXEC_ROOTS` and
+  `MEDFARL_ALLOWED_EDIT_ROOTS`.
 - Tool calls are explicit. Only registered tools can be called. The LLM cannot invent
   new capabilities.
 - Tool results are capped. `read_file` truncates at 12,000 characters. Shell output is

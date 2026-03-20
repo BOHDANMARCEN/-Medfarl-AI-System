@@ -8,6 +8,13 @@ def _split_paths(raw: str) -> list[str]:
     return [path.strip() for path in raw.split(os.pathsep) if path.strip()]
 
 
+def _env_flag(name: str, default: bool = True) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 @dataclass
 class Settings:
     llm_url: str = os.getenv("MEDFARL_LLM_URL", "http://localhost:11434")
@@ -18,6 +25,24 @@ class Settings:
         default_factory=lambda: _split_paths(
             os.getenv("MEDFARL_ALLOWED_READ_ROOTS", os.pathsep.join([os.getcwd()]))
         )
+    )
+    allowed_edit_roots: list[str] = field(
+        default_factory=lambda: _split_paths(
+            os.getenv("MEDFARL_ALLOWED_EDIT_ROOTS", os.pathsep.join([os.getcwd()]))
+        )
+    )
+    allowed_exec_roots: list[str] = field(
+        default_factory=lambda: _split_paths(
+            os.getenv("MEDFARL_ALLOWED_EXEC_ROOTS", os.pathsep.join([os.getcwd()]))
+        )
+    )
+    require_confirmation_for_exec: bool = _env_flag("MEDFARL_CONFIRM_EXEC", True)
+    require_confirmation_for_delete: bool = _env_flag("MEDFARL_CONFIRM_DELETE", True)
+    require_confirmation_for_package_changes: bool = _env_flag(
+        "MEDFARL_CONFIRM_PACKAGE_CHANGES", True
+    )
+    require_confirmation_for_file_edits: bool = _env_flag(
+        "MEDFARL_CONFIRM_FILE_EDITS", True
     )
 
     @property
