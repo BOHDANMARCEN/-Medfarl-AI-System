@@ -15,6 +15,8 @@ logs, and services — then explains what it finds in plain language.
 - [Why Medfarl](#why-medfarl)
 - [How it works](#how-it-works)
 - [Quick start](#quick-start)
+- [First user flow](#first-user-flow)
+- [Demo](#demo)
 - [Configuration](#configuration)
 - [Project structure](#project-structure)
 - [Architecture deep dive](#architecture-deep-dive)
@@ -103,6 +105,13 @@ python main.py --benchmark-models llama3.2:3b qwen3.5:4b qwen3.5:9b
 python main.py
 ```
 
+Windows quick launchers:
+
+```bat
+run-llama.bat
+run-qwen4b.bat --timeout 240
+```
+
 `--healthcheck` verifies that Ollama is reachable and that `MEDFARL_MODEL` is installed
 and supports tool calling before you start the interactive session. `--list-models`
 shows local Ollama models, `--model` overrides the default model for a single run, and
@@ -117,6 +126,50 @@ You will see the banner and a `medfarl>` prompt. Type any diagnostic question or
 
 ---
 
+## First user flow
+
+The default UX is optimized for a short, guided first interaction.
+
+- `привіт` returns a clear next-step menu (overall health, processes, disks, network, logs).
+- Very short intents are normalized before LLM reasoning:
+  - `діагностикою ПК` → `Зроби загальну діагностику ПК`
+  - `процеси` → `Покажи найважчі процеси`
+  - `мережа` → `Перевір стан мережі`
+  - `диск` / `диски` → `Перевір диски і вільне місце`
+  - `логи` → `Покажи помилки в системних логах`
+- Ambiguous short inputs trigger a clarification prompt instead of a low-quality guess.
+
+For `діагностика ПК`, the agent runs a deterministic local flow (snapshot + software summary)
+and returns a short PC Doctor-style report without chatty detours.
+
+---
+
+## Demo
+
+```text
+medfarl> привіт
+Привіт! Що саме перевірити: загальний стан системи, процеси, диски, мережу чи логи?
+
+medfarl> діагностикою ПК
+Добре, запускаю базову діагностику системи.
+- CPU: ...
+- RAM: ...
+- Disk: ...
+- Processes: ...
+- Services & packages: ...
+- Network: ...
+```
+
+Typical internal flow for that second command:
+
+```text
+normalize intent -> deterministic diagnostics -> concise report
+```
+
+This keeps the first experience practical: less small talk, more actual diagnostics.
+
+---
+
 ## Configuration
 
 All settings live in `config.py` as a `Settings` dataclass. Every field can be
@@ -125,7 +178,7 @@ overridden with an environment variable.
 | Variable | Default | Description |
 |---|---|---|
 | `MEDFARL_LLM_URL` | `http://localhost:11434` | Ollama or any OpenAI-compatible endpoint |
-| `MEDFARL_MODEL` | `llama3.2:3b` | Model name as Ollama knows it |
+| `MEDFARL_MODEL` | `qwen3.5:4b` | Model name as Ollama knows it |
 | `MEDFARL_TIMEOUT` | `120` | HTTP timeout in seconds for LLM calls |
 | `MEDFARL_MAX_TOOL_STEPS` | `8` | Maximum tool call iterations per user turn |
 | `MEDFARL_ALLOWED_READ_ROOTS` | current workspace | `os.pathsep`-separated roots for file read access |

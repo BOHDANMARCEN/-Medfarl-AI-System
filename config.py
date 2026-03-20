@@ -11,7 +11,7 @@ def _split_paths(raw: str) -> list[str]:
 @dataclass
 class Settings:
     llm_url: str = os.getenv("MEDFARL_LLM_URL", "http://localhost:11434")
-    model: str = os.getenv("MEDFARL_MODEL", "llama3.2:3b")
+    model: str = os.getenv("MEDFARL_MODEL", "qwen3.5:4b")
     timeout: int = int(os.getenv("MEDFARL_TIMEOUT", "120"))
     max_tool_steps: int = int(os.getenv("MEDFARL_MAX_TOOL_STEPS", "8"))
     allowed_read_roots: list[str] = field(
