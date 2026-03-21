@@ -93,6 +93,17 @@ Operational rules:
 - Prefer specialized tools over generic shell execution.
 """
 
+SYSTEM_HELP_PROMPT = """\
+Користувач запитав про можливості Medfarl.
+
+Відповідай українською мовою. Постав коротке уточнююче питання (1-2 речення) і запропонуй 3 нумеровані категорії:
+1. діагностика ПК
+2. обслуговування / дії
+3. інше запитання
+
+Відповідь має бути короткою: 2-4 речення, не більше. Не використовуй tools.
+"""
+
 
 GREETING_PATTERN = re.compile(
     r"^\s*(hi|hello|hey|yo|hola|привіт|привет|вітаю|доброго дня|добрий день|добрий вечір)\s*[!.?]*\s*$",
@@ -1836,8 +1847,18 @@ class MedfarlAgent:
         return ""
 
     def _handle_llm_reasoning(self, classification: dict[str, Any]) -> str:
+        kind = classification.get("kind")
         normalized_message = classification.get("normalized_message") or ""
         fallback_reply = classification.get("fallback_reply")
+
+        if kind == "help":
+            reply = self._run_help_llm()
+            if not str(reply).strip():
+                reply = fallback_reply or _help_reply()
+            self._history.append({"role": "user", "content": normalized_message})
+            self._history.append({"role": "assistant", "content": reply})
+            return reply
+
         self._history.append({"role": "user", "content": normalized_message})
         try:
             reply = self._run_agent_loop()
@@ -1854,6 +1875,18 @@ class MedfarlAgent:
                 reply = fallback_reply
         self._history.append({"role": "assistant", "content": reply})
         return reply
+
+    def _run_help_llm(self) -> str:
+        messages = [
+            {"role": "system", "content": SYSTEM_HELP_PROMPT},
+            {"role": "user", "content": "Покажи можливості Medfarl"},
+        ]
+        try:
+            response = self.client.chat(messages=messages, tools=None)
+        except Exception:
+            return ""
+        content = response.get("assistant_message", {}).get("content", "").strip()
+        return content
 
     def _record_response(self, user_content: str, reply: str) -> None:
         self._history.append({"role": "user", "content": user_content})

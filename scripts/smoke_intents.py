@@ -137,27 +137,46 @@ def main() -> None:
     )
     _assert(open_ended_cls.get("kind") == "open_ended", "open-ended kind")
 
-    # --- Help timeout fallback (TimeoutError) ---
-    original_loop = agent._run_agent_loop
+    # --- Help: interactive question + 3 categories ---
+    help_cls = agent.classify_request("а що ти ще можеш")
+    _assert(help_cls.get("kind") == "help", "help kind is help")
+    _assert(help_cls.get("fallback_reply") is not None, "help has fallback_reply")
 
-    def _timeout_loop() -> str:
-        raise TimeoutError("timeout during help reasoning")
+    # --- Help timeout fallback ---
+    original_chat = agent.client.chat
 
-    agent._run_agent_loop = _timeout_loop
+    def _timeout_chat(messages, tools=None, **kwargs):
+        raise TimeoutError("timeout during help")
+
+    agent.client.chat = _timeout_chat
     help_fallback = agent.handle_user_message("а що ти ще можеш")
-    _expect_contains(help_fallback, "Я можу допомогти", "help timeout fallback")
-    agent._run_agent_loop = original_loop
+    _expect_contains(help_fallback, "діагностика", "help timeout fallback has diag")
+    _expect_contains(
+        help_fallback, "створи файл", "help timeout fallback has create file"
+    )
+    agent.client.chat = original_chat
 
     # --- Help non-timeout error fallback ---
-    def _error_loop() -> str:
+    def _error_chat(messages, tools=None, **kwargs):
         raise RuntimeError("model unavailable")
 
-    agent._run_agent_loop = _error_loop
+    agent.client.chat = _error_chat
     help_error_fallback = agent.handle_user_message("а що ти ще можеш")
     _expect_contains(
-        help_error_fallback, "Я можу допомогти", "help non-timeout fallback"
+        help_error_fallback, "діагностика", "help non-timeout fallback has diag"
     )
-    agent._run_agent_loop = original_loop
+    agent.client.chat = original_chat
+
+    # --- Help non-timeout error fallback ---
+    def _error_chat(messages, tools=None, **kwargs):
+        raise RuntimeError("model unavailable")
+
+    agent.client.chat = _error_chat
+    help_error_fallback = agent.handle_user_message("а що ти ще можеш")
+    _expect_contains(
+        help_error_fallback, "діагностика", "help non-timeout fallback has diag"
+    )
+    agent.client.chat = original_chat
 
     # --- Pending action blocks new install but allows pending/cancel ---
     _assert(not agent.approval.has_pending(), "no pending at start")
@@ -175,6 +194,11 @@ def main() -> None:
 
     help_reply = agent.handle_user_message("а що ти ще можеш")
     _assert(bool(help_reply.strip()), "help flow should return non-empty reply")
+    _assert(len(help_reply) < 800, "help reply should be short (interactive question)")
+    _assert(
+        "?" in help_reply or "Що" in help_reply or "діагностика" in help_reply,
+        "help should contain question or category options",
+    )
 
     guided_create = agent.handle_user_message("файл створи")
     _expect_contains(guided_create, "мені потрібен шлях", "guided create file flow")
