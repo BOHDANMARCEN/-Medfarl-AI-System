@@ -166,6 +166,7 @@ pending
 The default UX is optimized for a short, guided first interaction.
 
 - `привіт` returns a clear next-step menu (overall health, processes, disks, network, logs).
+- `help`, `допомога`, or `що ти ще можеш` routes through LLM reasoning first, with a deterministic capability summary as timeout/error fallback.
 - Very short intents are normalized into deterministic actions before LLM reasoning:
   - `діагностикою ПК` → `Зроби загальну діагностику ПК`
   - `процеси` → `Покажи найважчі процеси`
@@ -222,6 +223,9 @@ Junk cleanup stage 2 tools are available and still confirmation-gated:
 - `show_quarantine(limit)`
 - `restore_from_quarantine(entry_ids, destination_root=None, overwrite=False)`
 - `delete_junk_files(paths, recursive)`
+
+If a maintenance request is incomplete (for example `файл створи` or `встанови пакет`),
+Medfarl now responds with a guided next-step example instead of falling back to a generic ambiguous-input message.
 
 Quarantine lifecycle:
 

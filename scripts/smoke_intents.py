@@ -7,7 +7,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.agent import MedfarlAgent
+from core.agent import (
+    MedfarlAgent,
+    ROUTE_DETERMINISTIC_ACTION,
+    ROUTE_DETERMINISTIC_SUMMARY,
+    ROUTE_LLM_REASONING,
+)
 
 
 def _assert(condition: bool, message: str) -> None:
@@ -24,8 +29,46 @@ def _expect_contains(reply: str, needle: str, label: str) -> None:
 def main() -> None:
     agent = MedfarlAgent(timeout=60)
 
+    route_help = agent.classify_request("а що ти ще можеш")
+    _assert(route_help.get("route") == ROUTE_LLM_REASONING, "help should route to llm")
+
+    route_diag = agent.classify_request("діагностика ПК")
+    _assert(
+        route_diag.get("route") == ROUTE_DETERMINISTIC_SUMMARY,
+        "diagnostic should route to deterministic_summary",
+    )
+
+    route_action = agent.classify_request("встанови пакет rich")
+    _assert(
+        route_action.get("route") == ROUTE_DETERMINISTIC_ACTION,
+        "install should route to deterministic_action",
+    )
+
+    original_loop = agent._run_agent_loop
+
+    def _timeout_loop() -> str:
+        raise TimeoutError("timeout during help reasoning")
+
+    agent._run_agent_loop = _timeout_loop
+    help_fallback = agent.handle_user_message("а що ти ще можеш")
+    _expect_contains(help_fallback, "Я можу допомогти", "help timeout fallback")
+    agent._run_agent_loop = original_loop
+
     greeting = agent.handle_user_message("привіт")
     _expect_contains(greeting, "Що саме перевірити", "greeting flow")
+
+    help_reply = agent.handle_user_message("а що ти ще можеш")
+    _assert(bool(help_reply.strip()), "help flow should return non-empty reply")
+
+    guided_create = agent.handle_user_message("файл створи")
+    _expect_contains(guided_create, "мені потрібен шлях", "guided create file flow")
+
+    guided_install = agent.handle_user_message("встанови пакет")
+    _expect_contains(
+        guided_install,
+        "можу встановити Python-пакет",
+        "guided install package flow",
+    )
 
     diagnostic = agent.handle_user_message("діагностикою ПК")
     _expect_contains(

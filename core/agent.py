@@ -104,6 +104,11 @@ PROCESS_INTENT = "Покажи найважчі процеси"
 DISK_INTENT = "Перевір диски і вільне місце"
 NETWORK_INTENT = "Перевір стан мережі"
 LOGS_INTENT = "Покажи помилки в системних логах"
+HELP_INTENT = "Покажи можливості Medfarl"
+
+ROUTE_DETERMINISTIC_ACTION = "deterministic_action"
+ROUTE_DETERMINISTIC_SUMMARY = "deterministic_summary"
+ROUTE_LLM_REASONING = "llm_reasoning"
 
 INTENT_NORMALIZATION: dict[str, str] = {
     "діагностика": DIAGNOSTIC_INTENT,
@@ -116,7 +121,28 @@ INTENT_NORMALIZATION: dict[str, str] = {
     "диски": DISK_INTENT,
     "лог": LOGS_INTENT,
     "логи": LOGS_INTENT,
+    "що ти ще можеш": HELP_INTENT,
+    "а що ти ще можеш": HELP_INTENT,
+    "що ти можеш": HELP_INTENT,
+    "що ти вмієш": HELP_INTENT,
+    "що вмієш": HELP_INTENT,
+    "що ще можеш": HELP_INTENT,
+    "що ще вмієш": HELP_INTENT,
+    "можливості": HELP_INTENT,
+    "допомога": HELP_INTENT,
+    "help": HELP_INTENT,
+    "команди": HELP_INTENT,
+    "commands": HELP_INTENT,
 }
+
+HELP_PATTERNS = [
+    re.compile(r"(?i)^а?\s*що\s+ти\s+ще\s+можеш\??$"),
+    re.compile(r"(?i)^що\s+ти\s+можеш\??$"),
+    re.compile(r"(?i)^що\s+вмієш\??$"),
+    re.compile(r"(?i)^help$"),
+    re.compile(r"(?i)^допомога$"),
+    re.compile(r"(?i)^команди$"),
+]
 
 SHORT_ACTION_VERBS = {
     "перевір",
@@ -131,6 +157,25 @@ SHORT_ACTION_VERBS = {
     "проверь",
     "покажи",
     "сделай",
+    "створи",
+    "создай",
+    "create",
+    "запусти",
+    "запустити",
+    "run",
+    "launch",
+    "install",
+    "встанови",
+    "установи",
+    "видали",
+    "удали",
+    "delete",
+    "редагуй",
+    "edit",
+    "зміни",
+    "измени",
+    "додай",
+    "add",
 }
 
 WINDOWS_PATH_PATTERN = re.compile(r"(?i)\b[A-Z]:\\[^\n\r\t\"<>|?*]*")
@@ -298,6 +343,160 @@ def _greeting_reply(message: str) -> Optional[str]:
             "диски, сеть или логи?"
         )
     return "Hi! What should I check first: overall health, processes, disks, network, or logs?"
+
+
+def _compact(text: str) -> str:
+    return " ".join(text.strip().split()).casefold()
+
+
+def _is_help_request(message: str) -> bool:
+    compact = " ".join(message.strip().split())
+    return any(pattern.match(compact) for pattern in HELP_PATTERNS)
+
+
+def _help_reply() -> str:
+    return (
+        "Я можу допомогти з такими задачами:\n"
+        "- діагностика ПК\n"
+        "- процеси\n"
+        "- диски\n"
+        "- мережа\n"
+        "- логи\n"
+        "- перевірка антивіруса і баз\n"
+        "- створення файлів і папок\n"
+        "- запис і редагування текстових файлів\n"
+        "- запуск дозволених програм через approve\n"
+        "- встановлення або видалення Python-пакетів через approve\n"
+        "- preview / quarantine / restore сміття\n\n"
+        "Приклади:\n"
+        "- діагностика ПК\n"
+        "- покажи процеси\n"
+        "- створи файл logs/report.txt\n"
+        "- створи папку temp/data\n"
+        "- встанови пакет rich\n"
+        "- видали пакет requests\n"
+        "- запусти C:\\Tools\\scan.exe\n"
+        "- show quarantine"
+    )
+
+
+def _guided_create_file_reply() -> str:
+    return (
+        "Добре. Я можу створити файл, але мені потрібен шлях.\n"
+        "Наприклад:\n"
+        "- створи файл logs/report.txt\n"
+        "- створи файл C:\\temp\\note.txt"
+    )
+
+
+def _guided_create_directory_reply() -> str:
+    return (
+        "Добре. Я можу створити папку, але мені потрібен шлях.\n"
+        "Наприклад:\n"
+        "- створи папку logs/archive\n"
+        "- створи папку C:\\temp\\reports"
+    )
+
+
+def _guided_run_program_reply() -> str:
+    return (
+        "Добре. Я можу підготувати запуск програми через підтвердження, але мені потрібен шлях.\n"
+        "Якщо в шляху є пробіли, візьми його в лапки.\n"
+        "Наприклад:\n"
+        '- запусти "C:\\Program Files\\ClamAV\\clamscan.exe"\n'
+        '- запусти "C:\\Tools\\scan.exe"'
+    )
+
+
+def _guided_install_package_reply() -> str:
+    return (
+        "Добре. Я можу встановити Python-пакет після підтвердження.\n"
+        "Наприклад:\n"
+        "- встанови пакет rich\n"
+        "- встанови пакет requests"
+    )
+
+
+def _guided_uninstall_package_reply() -> str:
+    return (
+        "Добре. Я можу видалити Python-пакет після підтвердження.\n"
+        "Наприклад:\n"
+        "- видали пакет rich\n"
+        "- uninstall package requests"
+    )
+
+
+def _guided_append_file_reply() -> str:
+    return (
+        "Добре. Я можу додати текст у файл, але мені потрібен шлях і сам текст.\n"
+        "Наприклад:\n"
+        "- додай текст у файл notes.txt text: hello"
+    )
+
+
+def _guided_replace_file_reply() -> str:
+    return (
+        "Добре. Я можу замінити текст у файлі, але мені потрібні шлях, старий і новий фрагмент.\n"
+        "Наприклад:\n"
+        "- заміни в файлі notes.txt old на new"
+    )
+
+
+def _guided_move_junk_reply() -> str:
+    return (
+        "Для переміщення сміття в quarantine надай конкретні шляхи.\n"
+        "Наприклад:\n"
+        "- move junk to quarantine C:\\Users\\User\\AppData\\Local\\Temp\\old.tmp"
+    )
+
+
+def _guided_delete_junk_reply() -> str:
+    return (
+        "Для видалення сміття вкажи шляхи до файлів або папок.\n"
+        "Краще спочатку зробити preview: `знайди сміття`."
+    )
+
+
+def _guided_maintenance_reply(message: str) -> Optional[str]:
+    compact = _compact(message)
+
+    if compact in {"файл створи", "створи файл", "create file", "создай файл"}:
+        return _guided_create_file_reply()
+    if compact in {
+        "папку створи",
+        "створи папку",
+        "створи директорію",
+        "create folder",
+        "create directory",
+        "создай папку",
+    }:
+        return _guided_create_directory_reply()
+    if compact in {"встанови пакет", "install package", "установи пакет"}:
+        return _guided_install_package_reply()
+    if compact in {"видали пакет", "uninstall package", "удали пакет"}:
+        return _guided_uninstall_package_reply()
+    if compact in {"запусти", "запусти програму", "run", "run program"}:
+        return _guided_run_program_reply()
+    if compact in {
+        "додай текст",
+        "додай текст у файл",
+        "append text",
+        "append to file",
+    }:
+        return _guided_append_file_reply()
+    if compact in {
+        "заміни в файлі",
+        "заміни текст",
+        "replace in file",
+        "replace text",
+    }:
+        return _guided_replace_file_reply()
+    if compact in {"перемісти сміття", "move junk", "move junk to quarantine"}:
+        return _guided_move_junk_reply()
+    if compact in {"видали сміття", "delete junk", "remove junk"}:
+        return _guided_delete_junk_reply()
+
+    return None
 
 
 def _parse_control_command(message: str) -> tuple[Optional[str], Optional[str]]:
@@ -851,7 +1050,8 @@ def _ambiguous_input_reply() -> str:
         "- процеси\n"
         "- диски\n"
         "- мережа\n"
-        "- логи"
+        "- логи\n"
+        "- help"
     )
 
 
@@ -1133,8 +1333,152 @@ class MedfarlAgent:
         self._history: List[Dict[str, Any]] = []
         self._bootstrap()
 
+    def classify_request(self, message: str) -> dict[str, Any]:
+        cleaned_message = message.strip()
+        normalized_message = _normalize_intent(cleaned_message)
+        control_action, _ = _parse_control_command(cleaned_message)
+
+        if control_action in {"pending", "history", "last", "approve", "cancel"}:
+            return {
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "control",
+            }
+
+        if _is_help_request(cleaned_message) or normalized_message == HELP_INTENT:
+            return {
+                "route": ROUTE_LLM_REASONING,
+                "kind": "help",
+                "normalized_message": HELP_INTENT,
+            }
+
+        if self.approval.has_pending():
+            return {
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "pending_gate",
+            }
+
+        if _guided_maintenance_reply(cleaned_message) is not None:
+            return {
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "guided_maintenance",
+            }
+
+        if _is_show_quarantine_request(cleaned_message):
+            return {
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "show_quarantine",
+            }
+
+        if _extract_restore_quarantine_request(cleaned_message) or any(
+            pattern.search(" ".join(cleaned_message.strip().split()))
+            for pattern in RESTORE_QUARANTINE_PATTERNS
+        ):
+            return {
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "restore_quarantine",
+            }
+
+        if _is_antivirus_update_request(cleaned_message):
+            return {
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "antivirus_update",
+            }
+
+        if _extract_antivirus_custom_scan_request(cleaned_message) or any(
+            pattern.search(" ".join(cleaned_message.strip().split()))
+            for pattern in ANTIVIRUS_CUSTOM_SCAN_PATTERNS
+        ):
+            return {
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "antivirus_custom_scan",
+            }
+
+        if _is_antivirus_threats_request(cleaned_message):
+            return {
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "antivirus_threats",
+            }
+
+        if _is_antivirus_quick_scan_request(cleaned_message) or (
+            "антивірус" in cleaned_message.casefold()
+            or "antivirus" in cleaned_message.casefold()
+        ):
+            return {
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "antivirus_detect_or_scan",
+            }
+
+        if (
+            _extract_install_request(cleaned_message)
+            or _extract_uninstall_request(cleaned_message)
+            or _extract_create_file_request(cleaned_message)
+            or _extract_append_file_request(cleaned_message)
+            or _extract_replace_file_request(cleaned_message)
+            or _extract_run_program_request(cleaned_message)
+            or _is_find_junk_request(cleaned_message)
+            or _extract_move_junk_request(cleaned_message)
+            or _extract_delete_junk_request(cleaned_message)
+        ):
+            return {
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "maintenance_or_files",
+            }
+
+        if any(
+            pattern.search(" ".join(cleaned_message.strip().split()))
+            for pattern in MOVE_JUNK_PATTERNS + DELETE_JUNK_PATTERNS
+        ):
+            return {
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "junk_guided",
+            }
+
+        recent_path = _find_recent_windows_path(self._history)
+        if _looks_like_software_path_request(cleaned_message, recent_path) or (
+            recent_path and _looks_like_operational_request(cleaned_message)
+        ):
+            return {
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "path_guidance",
+            }
+
+        if _greeting_reply(cleaned_message) is not None:
+            return {
+                "route": ROUTE_DETERMINISTIC_SUMMARY,
+                "kind": "greeting",
+            }
+
+        if normalized_message in {
+            DIAGNOSTIC_INTENT,
+            PROCESS_INTENT,
+            DISK_INTENT,
+            NETWORK_INTENT,
+            LOGS_INTENT,
+        }:
+            return {
+                "route": ROUTE_DETERMINISTIC_SUMMARY,
+                "kind": "summary_intent",
+                "normalized_message": normalized_message,
+            }
+
+        if normalized_message == cleaned_message and _is_short_ambiguous_message(
+            cleaned_message
+        ):
+            return {
+                "route": ROUTE_DETERMINISTIC_SUMMARY,
+                "kind": "ambiguous",
+            }
+
+        return {
+            "route": ROUTE_LLM_REASONING,
+            "kind": "open_ended",
+            "normalized_message": normalized_message,
+        }
+
     def handle_user_message(self, message: str) -> str:
         cleaned_message = message.strip()
+        normalized_message = _normalize_intent(cleaned_message)
+        classification = self.classify_request(cleaned_message)
 
         control_action, control_id = _parse_control_command(cleaned_message)
         if control_action == "pending":
@@ -1153,6 +1497,16 @@ class MedfarlAgent:
             response = self._last_action_report()
             self._history.append({"role": "user", "content": cleaned_message})
             self._history.append({"role": "assistant", "content": response})
+            return response
+
+        if (
+            classification.get("route") == ROUTE_LLM_REASONING
+            and classification.get("kind") == "help"
+        ):
+            response = self._run_llm_reasoning(
+                user_content=HELP_INTENT,
+                fallback_reply=_help_reply(),
+            )
             return response
 
         if _is_show_quarantine_request(cleaned_message):
@@ -1178,6 +1532,12 @@ class MedfarlAgent:
             self._history.append({"role": "user", "content": cleaned_message})
             self._history.append({"role": "assistant", "content": response})
             return response
+
+        guided_maintenance = _guided_maintenance_reply(cleaned_message)
+        if guided_maintenance is not None:
+            self._history.append({"role": "user", "content": cleaned_message})
+            self._history.append({"role": "assistant", "content": guided_maintenance})
+            return guided_maintenance
 
         restore_request = _extract_restore_quarantine_request(cleaned_message)
         if restore_request:
@@ -1437,57 +1797,80 @@ class MedfarlAgent:
             self._history.append({"role": "assistant", "content": guided})
             return guided
 
-        greeting = _greeting_reply(cleaned_message)
-        if greeting is not None:
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": greeting})
-            return greeting
+        if classification.get("route") == ROUTE_DETERMINISTIC_SUMMARY:
+            greeting = _greeting_reply(cleaned_message)
+            if greeting is not None:
+                self._history.append({"role": "user", "content": cleaned_message})
+                self._history.append({"role": "assistant", "content": greeting})
+                return greeting
 
-        normalized_message = _normalize_intent(cleaned_message)
+            if normalized_message == DIAGNOSTIC_INTENT:
+                report = _deterministic_diagnostic_report(self.scanner, self.inspector)
+                self._history.append({"role": "user", "content": normalized_message})
+                self._history.append({"role": "assistant", "content": report})
+                return report
 
-        if normalized_message == DIAGNOSTIC_INTENT:
-            report = _deterministic_diagnostic_report(self.scanner, self.inspector)
-            self._history.append({"role": "user", "content": normalized_message})
-            self._history.append({"role": "assistant", "content": report})
-            return report
+            if normalized_message == PROCESS_INTENT:
+                report = _deterministic_process_report(self.scanner)
+                self._history.append({"role": "user", "content": normalized_message})
+                self._history.append({"role": "assistant", "content": report})
+                return report
 
-        if normalized_message == PROCESS_INTENT:
-            report = _deterministic_process_report(self.scanner)
-            self._history.append({"role": "user", "content": normalized_message})
-            self._history.append({"role": "assistant", "content": report})
-            return report
+            if normalized_message == DISK_INTENT:
+                report = _deterministic_disk_report(self.scanner)
+                self._history.append({"role": "user", "content": normalized_message})
+                self._history.append({"role": "assistant", "content": report})
+                return report
 
-        if normalized_message == DISK_INTENT:
-            report = _deterministic_disk_report(self.scanner)
-            self._history.append({"role": "user", "content": normalized_message})
-            self._history.append({"role": "assistant", "content": report})
-            return report
+            if normalized_message == NETWORK_INTENT:
+                report = _deterministic_network_report(self.scanner)
+                self._history.append({"role": "user", "content": normalized_message})
+                self._history.append({"role": "assistant", "content": report})
+                return report
 
-        if normalized_message == NETWORK_INTENT:
-            report = _deterministic_network_report(self.scanner)
-            self._history.append({"role": "user", "content": normalized_message})
-            self._history.append({"role": "assistant", "content": report})
-            return report
+            if normalized_message == LOGS_INTENT:
+                report = _deterministic_logs_report(limit=5)
+                self._history.append({"role": "user", "content": normalized_message})
+                self._history.append({"role": "assistant", "content": report})
+                return report
 
-        if normalized_message == LOGS_INTENT:
-            report = _deterministic_logs_report(limit=5)
-            self._history.append({"role": "user", "content": normalized_message})
-            self._history.append({"role": "assistant", "content": report})
-            return report
+            if normalized_message == cleaned_message and _is_short_ambiguous_message(
+                cleaned_message
+            ):
+                clarification = _ambiguous_input_reply()
+                self._history.append({"role": "user", "content": cleaned_message})
+                self._history.append({"role": "assistant", "content": clarification})
+                return clarification
 
-        if normalized_message == cleaned_message and _is_short_ambiguous_message(
-            cleaned_message
-        ):
-            clarification = _ambiguous_input_reply()
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": clarification})
-            return clarification
+        return self._run_llm_reasoning(user_content=normalized_message)
 
-        self._history.append({"role": "user", "content": normalized_message})
-        reply = self._run_agent_loop()
-        reply = self._postprocess_reply(reply)
+    def _run_llm_reasoning(
+        self,
+        *,
+        user_content: str,
+        fallback_reply: Optional[str] = None,
+    ) -> str:
+        self._history.append({"role": "user", "content": user_content})
+        try:
+            reply = self._run_agent_loop()
+        except Exception as exc:
+            if fallback_reply is not None:
+                reply = fallback_reply
+                if not self._is_timeout_error(exc):
+                    reply = f"{fallback_reply}\n\n(LLM помилка: {str(exc).strip()})"
+            else:
+                reply = self._friendly_runtime_error(exc)
+        else:
+            reply = self._postprocess_reply(reply)
+            if fallback_reply is not None and not str(reply).strip():
+                reply = fallback_reply
+
         self._history.append({"role": "assistant", "content": reply})
         return reply
+
+    def _is_timeout_error(self, exc: Exception) -> bool:
+        lowered = str(exc).casefold()
+        return "timed out" in lowered or "timeout" in lowered
 
     def reset(self) -> None:
         self._bootstrap()
@@ -1568,6 +1951,19 @@ class MedfarlAgent:
 
     def _full_messages(self) -> List[Dict[str, Any]]:
         return [{"role": "system", "content": SYSTEM_PROMPT}, *self._history]
+
+    def _friendly_runtime_error(self, exc: Exception) -> str:
+        text = str(exc).strip()
+        lowered = text.casefold()
+        if "timed out" in lowered or "timeout" in lowered:
+            return (
+                "LLM не встиг відповісти в межах timeout.\n"
+                "Спробуй коротший або конкретніший запит, наприклад:\n"
+                "- help\n"
+                "- діагностика ПК\n"
+                "- процеси"
+            )
+        return f"Не вдалося завершити запит: {text}"
 
     def _postprocess_reply(self, reply: str) -> str:
         if not self.client.model.startswith("llama3.2"):
