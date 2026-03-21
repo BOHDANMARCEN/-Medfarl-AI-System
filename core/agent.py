@@ -1336,117 +1336,311 @@ class MedfarlAgent:
     def classify_request(self, message: str) -> dict[str, Any]:
         cleaned_message = message.strip()
         normalized_message = _normalize_intent(cleaned_message)
-        control_action, _ = _parse_control_command(cleaned_message)
+        control_action, control_id = _parse_control_command(cleaned_message)
+
+        base: dict[str, Any] = {
+            "route": None,
+            "kind": None,
+            "cleaned_message": cleaned_message,
+            "normalized_message": normalized_message,
+            "control_action": control_action,
+            "control_id": control_id,
+            "payload": None,
+            "guided_reply": None,
+            "fallback_reply": None,
+            "recent_path": None,
+        }
 
         if control_action in {"pending", "history", "last", "approve", "cancel"}:
-            return {
-                "route": ROUTE_DETERMINISTIC_ACTION,
-                "kind": "control",
-            }
+            return {**base, "route": ROUTE_DETERMINISTIC_ACTION, "kind": "control"}
 
         if _is_help_request(cleaned_message) or normalized_message == HELP_INTENT:
             return {
+                **base,
                 "route": ROUTE_LLM_REASONING,
                 "kind": "help",
                 "normalized_message": HELP_INTENT,
+                "fallback_reply": _help_reply(),
             }
 
         if self.approval.has_pending():
-            return {
-                "route": ROUTE_DETERMINISTIC_ACTION,
-                "kind": "pending_gate",
-            }
+            return {**base, "route": ROUTE_DETERMINISTIC_ACTION, "kind": "pending_gate"}
 
-        if _guided_maintenance_reply(cleaned_message) is not None:
+        guided_maintenance = _guided_maintenance_reply(cleaned_message)
+        if guided_maintenance is not None:
             return {
+                **base,
                 "route": ROUTE_DETERMINISTIC_ACTION,
                 "kind": "guided_maintenance",
+                "guided_reply": guided_maintenance,
             }
 
         if _is_show_quarantine_request(cleaned_message):
             return {
+                **base,
                 "route": ROUTE_DETERMINISTIC_ACTION,
                 "kind": "show_quarantine",
             }
 
-        if _extract_restore_quarantine_request(cleaned_message) or any(
-            pattern.search(" ".join(cleaned_message.strip().split()))
-            for pattern in RESTORE_QUARANTINE_PATTERNS
-        ):
+        restore_request = _extract_restore_quarantine_request(cleaned_message)
+        restore_pattern_match = any(
+            p.search(" ".join(cleaned_message.strip().split()))
+            for p in RESTORE_QUARANTINE_PATTERNS
+        )
+        if restore_request:
             return {
+                **base,
                 "route": ROUTE_DETERMINISTIC_ACTION,
                 "kind": "restore_quarantine",
+                "payload": restore_request,
+            }
+        if restore_pattern_match:
+            return {
+                **base,
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "restore_quarantine",
+                "guided_reply": (
+                    "Для restore з quarantine вкажи `entry_id`.\n"
+                    "Приклад: `restore from quarantine qk-1234abcd`."
+                ),
             }
 
         if _is_antivirus_update_request(cleaned_message):
+            provider = _extract_antivirus_provider(cleaned_message)
+            arguments: dict[str, Any] = {}
+            if provider:
+                arguments["provider"] = provider
             return {
+                **base,
                 "route": ROUTE_DETERMINISTIC_ACTION,
                 "kind": "antivirus_update",
+                "payload": {
+                    "tool_name": "update_antivirus_definitions",
+                    "arguments": arguments,
+                },
             }
 
-        if _extract_antivirus_custom_scan_request(cleaned_message) or any(
-            pattern.search(" ".join(cleaned_message.strip().split()))
-            for pattern in ANTIVIRUS_CUSTOM_SCAN_PATTERNS
-        ):
+        antivirus_custom = _extract_antivirus_custom_scan_request(cleaned_message)
+        antivirus_custom_pattern = any(
+            p.search(" ".join(cleaned_message.strip().split()))
+            for p in ANTIVIRUS_CUSTOM_SCAN_PATTERNS
+        )
+        if antivirus_custom:
             return {
+                **base,
                 "route": ROUTE_DETERMINISTIC_ACTION,
                 "kind": "antivirus_custom_scan",
+                "payload": {
+                    "tool_name": "run_antivirus_custom_scan",
+                    "arguments": antivirus_custom,
+                },
+            }
+        if antivirus_custom_pattern:
+            return {
+                **base,
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "antivirus_custom_scan",
+                "guided_reply": (
+                    "Щоб запустити кастомне антивірусне сканування, вкажи шлях.\n"
+                    "Приклад: `проскануй папку C:\\Users\\User\\Downloads`."
+                ),
             }
 
         if _is_antivirus_threats_request(cleaned_message):
+            provider = _extract_antivirus_provider(cleaned_message)
+            arguments: dict[str, Any] = {"limit": 20}
+            if provider:
+                arguments["provider"] = provider
             return {
+                **base,
                 "route": ROUTE_DETERMINISTIC_ACTION,
                 "kind": "antivirus_threats",
+                "payload": {
+                    "tool_name": "list_antivirus_threats",
+                    "arguments": arguments,
+                },
             }
 
         if _is_antivirus_quick_scan_request(cleaned_message) or (
             "антивірус" in cleaned_message.casefold()
             or "antivirus" in cleaned_message.casefold()
         ):
+            provider = _extract_antivirus_provider(cleaned_message)
+            arguments: dict[str, Any] = {}
+            if provider:
+                arguments["provider"] = provider
             return {
+                **base,
                 "route": ROUTE_DETERMINISTIC_ACTION,
                 "kind": "antivirus_detect_or_scan",
+                "payload": {
+                    "tool_name": "antivirus_quick_scan_or_detect",
+                    "arguments": arguments,
+                },
             }
 
-        if (
-            _extract_install_request(cleaned_message)
-            or _extract_uninstall_request(cleaned_message)
-            or _extract_create_file_request(cleaned_message)
-            or _extract_append_file_request(cleaned_message)
-            or _extract_replace_file_request(cleaned_message)
-            or _extract_run_program_request(cleaned_message)
-            or _is_find_junk_request(cleaned_message)
-            or _extract_move_junk_request(cleaned_message)
-            or _extract_delete_junk_request(cleaned_message)
-        ):
+        install_req = _extract_install_request(cleaned_message)
+        uninstall_req = _extract_uninstall_request(cleaned_message)
+        create_file_req = _extract_create_file_request(cleaned_message)
+        append_file_req = _extract_append_file_request(cleaned_message)
+        replace_file_req = _extract_replace_file_request(cleaned_message)
+        run_prog_req = _extract_run_program_request(cleaned_message)
+        find_junk = _is_find_junk_request(cleaned_message)
+        move_junk_req = _extract_move_junk_request(cleaned_message)
+        delete_junk_req = _extract_delete_junk_request(cleaned_message)
+
+        if install_req:
             return {
+                **base,
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "maintenance_or_files",
+                "payload": {
+                    "tool_name": "pip_install_package",
+                    "arguments": install_req,
+                },
+            }
+        if uninstall_req:
+            return {
+                **base,
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "maintenance_or_files",
+                "payload": {
+                    "tool_name": "pip_uninstall_package",
+                    "arguments": uninstall_req,
+                },
+            }
+        if create_file_req:
+            return {
+                **base,
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "maintenance_or_files",
+                "payload": {
+                    "tool_name": "create_text_file",
+                    "arguments": create_file_req,
+                },
+            }
+        if append_file_req:
+            return {
+                **base,
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "maintenance_or_files",
+                "payload": {
+                    "tool_name": "append_text_file",
+                    "arguments": append_file_req,
+                },
+            }
+        if replace_file_req:
+            return {
+                **base,
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "maintenance_or_files",
+                "payload": {
+                    "tool_name": "edit_text_file",
+                    "arguments": replace_file_req,
+                },
+            }
+
+        recent_path = _find_recent_windows_path(self._history)
+        candidate_path = _extract_windows_path(cleaned_message) or recent_path
+
+        if run_prog_req:
+            run_path = str(run_prog_req.get("path", ""))
+            if not is_under_roots(run_path, settings.allowed_exec_roots):
+                return {
+                    **base,
+                    "route": ROUTE_DETERMINISTIC_ACTION,
+                    "kind": "path_guidance",
+                    "recent_path": run_path,
+                    "guided_reply": _path_guided_reply(run_path, cleaned_message),
+                }
+            return {
+                **base,
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "maintenance_or_files",
+                "payload": {"tool_name": "run_program", "arguments": run_prog_req},
+            }
+
+        if find_junk:
+            return {
+                **base,
                 "route": ROUTE_DETERMINISTIC_ACTION,
                 "kind": "maintenance_or_files",
             }
 
+        if move_junk_req:
+            return {
+                **base,
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "maintenance_or_files",
+                "payload": {
+                    "tool_name": "move_junk_to_quarantine",
+                    "arguments": move_junk_req,
+                },
+            }
         if any(
-            pattern.search(" ".join(cleaned_message.strip().split()))
-            for pattern in MOVE_JUNK_PATTERNS + DELETE_JUNK_PATTERNS
+            p.search(" ".join(cleaned_message.strip().split()))
+            for p in MOVE_JUNK_PATTERNS
         ):
             return {
+                **base,
                 "route": ROUTE_DETERMINISTIC_ACTION,
                 "kind": "junk_guided",
+                "guided_reply": (
+                    "Для переміщення сміття в quarantine надай конкретні шляхи.\n"
+                    "Приклад: `перемісти сміття в quarantine C:\\Users\\User\\AppData\\Local\\Temp\\old.tmp`."
+                ),
             }
 
-        recent_path = _find_recent_windows_path(self._history)
-        if _looks_like_software_path_request(cleaned_message, recent_path) or (
-            recent_path and _looks_like_operational_request(cleaned_message)
+        if delete_junk_req:
+            return {
+                **base,
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "maintenance_or_files",
+                "payload": {
+                    "tool_name": "delete_junk_files",
+                    "arguments": delete_junk_req,
+                },
+            }
+        if any(
+            p.search(" ".join(cleaned_message.strip().split()))
+            for p in DELETE_JUNK_PATTERNS
         ):
             return {
+                **base,
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "junk_guided",
+                "guided_reply": (
+                    "Для видалення сміття вкажи шляхи до файлів/папок.\n"
+                    "Краще спочатку зробити preview: `знайди сміття`."
+                ),
+            }
+
+        if _looks_like_software_path_request(cleaned_message, recent_path):
+            if candidate_path and not is_under_roots(
+                candidate_path, settings.allowed_exec_roots
+            ):
+                return {
+                    **base,
+                    "route": ROUTE_DETERMINISTIC_ACTION,
+                    "kind": "path_guidance",
+                    "recent_path": candidate_path,
+                    "guided_reply": _path_guided_reply(candidate_path, cleaned_message),
+                }
+        if (
+            recent_path
+            and _looks_like_operational_request(cleaned_message)
+            and not is_under_roots(recent_path, settings.allowed_exec_roots)
+        ):
+            return {
+                **base,
                 "route": ROUTE_DETERMINISTIC_ACTION,
                 "kind": "path_guidance",
+                "recent_path": recent_path,
+                "guided_reply": _path_guided_reply(recent_path, cleaned_message),
             }
 
         if _greeting_reply(cleaned_message) is not None:
-            return {
-                "route": ROUTE_DETERMINISTIC_SUMMARY,
-                "kind": "greeting",
-            }
+            return {**base, "route": ROUTE_DETERMINISTIC_SUMMARY, "kind": "greeting"}
 
         if normalized_message in {
             DIAGNOSTIC_INTENT,
@@ -1456,401 +1650,195 @@ class MedfarlAgent:
             LOGS_INTENT,
         }:
             return {
+                **base,
                 "route": ROUTE_DETERMINISTIC_SUMMARY,
                 "kind": "summary_intent",
-                "normalized_message": normalized_message,
             }
 
         if normalized_message == cleaned_message and _is_short_ambiguous_message(
             cleaned_message
         ):
-            return {
-                "route": ROUTE_DETERMINISTIC_SUMMARY,
-                "kind": "ambiguous",
-            }
+            return {**base, "route": ROUTE_DETERMINISTIC_SUMMARY, "kind": "ambiguous"}
 
-        return {
-            "route": ROUTE_LLM_REASONING,
-            "kind": "open_ended",
-            "normalized_message": normalized_message,
-        }
+        return {**base, "route": ROUTE_LLM_REASONING, "kind": "open_ended"}
 
-    def handle_user_message(self, message: str) -> str:
-        cleaned_message = message.strip()
-        normalized_message = _normalize_intent(cleaned_message)
-        classification = self.classify_request(cleaned_message)
+    def _handle_deterministic_action(self, classification: dict[str, Any]) -> str:
+        kind = classification.get("kind")
+        cleaned_message = classification.get("cleaned_message") or ""
+        control_action = classification.get("control_action")
+        control_id = classification.get("control_id")
+        payload = classification.get("payload")
+        guided_reply = classification.get("guided_reply")
+        normalized_message = classification.get("normalized_message") or cleaned_message
 
-        control_action, control_id = _parse_control_command(cleaned_message)
-        if control_action == "pending":
-            response = self._pending_action_reminder()
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
+        if guided_reply:
+            self._record_response(normalized_message, guided_reply)
+            return guided_reply
 
-        if control_action == "history":
-            response = self._history_actions_report(control_id)
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
+        if kind == "control":
+            if control_action == "pending":
+                return self._pending_action_reminder()
+            if control_action == "history":
+                return self._history_actions_report(control_id)
+            if control_action == "last":
+                return self._last_action_report()
+            if control_action == "approve":
+                return self._approve_pending_action(action_id=control_id)
+            if control_action == "cancel":
+                return self._cancel_pending_action(action_id=control_id)
 
-        if control_action == "last":
-            response = self._last_action_report()
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
+        if kind == "pending_gate":
+            return self._pending_action_reminder()
 
-        if (
-            classification.get("route") == ROUTE_LLM_REASONING
-            and classification.get("kind") == "help"
-        ):
-            response = self._run_llm_reasoning(
-                user_content=HELP_INTENT,
-                fallback_reply=_help_reply(),
-            )
-            return response
+        if kind == "show_quarantine":
+            report = _deterministic_quarantine_report(limit=20)
+            self._record_response(cleaned_message, report)
+            return report
 
-        if _is_show_quarantine_request(cleaned_message):
-            response = _deterministic_quarantine_report(limit=20)
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
-
-        if control_action == "approve":
-            response = self._approve_pending_action(action_id=control_id)
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
-
-        if control_action == "cancel":
-            response = self._cancel_pending_action(action_id=control_id)
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
-
-        if self.approval.has_pending():
-            response = self._pending_action_reminder()
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
-
-        guided_maintenance = _guided_maintenance_reply(cleaned_message)
-        if guided_maintenance is not None:
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": guided_maintenance})
-            return guided_maintenance
-
-        restore_request = _extract_restore_quarantine_request(cleaned_message)
-        if restore_request:
-            missing = _missing_quarantine_entries(
-                [
-                    str(entry_id).lower()
-                    for entry_id in restore_request.get("entry_ids", [])
-                ]
-            )
-            if missing:
-                response = (
-                    "Не знайшов такі quarantine entry id: "
-                    + ", ".join(f"`{entry}`" for entry in missing)
-                    + ". Спочатку виконай `show quarantine`."
+        if kind == "restore_quarantine":
+            restore_request = classification.get("payload")
+            if restore_request:
+                missing = _missing_quarantine_entries(
+                    [str(eid).lower() for eid in restore_request.get("entry_ids", [])]
                 )
-            else:
+                if missing:
+                    msg = (
+                        "Не знайшов такі quarantine entry id: "
+                        + ", ".join(f"`{e}`" for e in missing)
+                        + ". Спочатку виконай `show quarantine`."
+                    )
+                    self._record_response(cleaned_message, msg)
+                    return msg
                 response = self._queue_pending_action(
                     tool_name="restore_from_quarantine",
                     arguments=restore_request,
                     note="Deterministic maintenance intent: restore from quarantine.",
                 )
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
-        if any(
-            pattern.search(" ".join(cleaned_message.strip().split()))
-            for pattern in RESTORE_QUARANTINE_PATTERNS
-        ):
-            response = (
-                "Для restore з quarantine вкажи `entry_id`.\n"
-                "Приклад: `restore from quarantine qk-1234abcd`."
-            )
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
-
-        if _is_antivirus_update_request(cleaned_message):
-            provider = _extract_antivirus_provider(cleaned_message)
-            arguments: dict[str, Any] = {}
-            if provider:
-                arguments["provider"] = provider
-            response = self._queue_pending_action(
-                tool_name="update_antivirus_definitions",
-                arguments=arguments,
-                note="Deterministic antivirus intent: update definitions.",
-            )
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
-
-        antivirus_custom = _extract_antivirus_custom_scan_request(cleaned_message)
-        if antivirus_custom:
-            response = self._queue_pending_action(
-                tool_name="run_antivirus_custom_scan",
-                arguments=antivirus_custom,
-                note="Deterministic antivirus intent: custom scan.",
-            )
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
-        if any(
-            pattern.search(" ".join(cleaned_message.strip().split()))
-            for pattern in ANTIVIRUS_CUSTOM_SCAN_PATTERNS
-        ):
-            response = (
-                "Щоб запустити кастомне антивірусне сканування, вкажи шлях.\n"
-                "Приклад: `проскануй папку C:\\Users\\User\\Downloads`."
-            )
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
-
-        if _is_antivirus_threats_request(cleaned_message):
-            provider = _extract_antivirus_provider(cleaned_message)
-            arguments: dict[str, Any] = {"limit": 20}
-            if provider:
-                arguments["provider"] = provider
-            result = list_antivirus_threats(**arguments)
-            response = _format_antivirus_threats_report(result)
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
-
-        if _is_antivirus_quick_scan_request(cleaned_message):
-            provider = _extract_antivirus_provider(cleaned_message)
-            arguments: dict[str, Any] = {}
-            if provider:
-                arguments["provider"] = provider
-            detection = detect_antivirus()
-            if not detection.get("available"):
-                response = _deterministic_antivirus_detect_report()
-                self._history.append({"role": "user", "content": cleaned_message})
-                self._history.append({"role": "assistant", "content": response})
+                self._record_response(cleaned_message, response)
                 return response
 
-            result = run_antivirus_quick_scan(**arguments)
-            response = _format_antivirus_scan_report(result)
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
+        if kind == "antivirus_threats":
+            if payload:
+                args = payload.get("arguments") or {}
+                result = list_antivirus_threats(**args)
+                report = _format_antivirus_threats_report(result)
+                self._record_response(cleaned_message, report)
+                return report
 
-        if (
-            "антивірус" in cleaned_message.casefold()
-            or "antivirus" in cleaned_message.casefold()
-        ):
-            response = _deterministic_antivirus_detect_report()
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
-
-        install_request = _extract_install_request(cleaned_message)
-        if install_request:
-            response = self._queue_pending_action(
-                tool_name="pip_install_package",
-                arguments=install_request,
-                note="Deterministic maintenance intent: install package.",
-            )
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
-
-        uninstall_request = _extract_uninstall_request(cleaned_message)
-        if uninstall_request:
-            response = self._queue_pending_action(
-                tool_name="pip_uninstall_package",
-                arguments=uninstall_request,
-                note="Deterministic maintenance intent: uninstall package.",
-            )
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
-
-        create_file_request = _extract_create_file_request(cleaned_message)
-        if create_file_request:
-            response = self._queue_pending_action(
-                tool_name="create_text_file",
-                arguments=create_file_request,
-                note="Deterministic maintenance intent: create file.",
-            )
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
-
-        append_file_request = _extract_append_file_request(cleaned_message)
-        if append_file_request:
-            response = self._queue_pending_action(
-                tool_name="append_text_file",
-                arguments=append_file_request,
-                note="Deterministic maintenance intent: append file.",
-            )
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
-
-        replace_file_request = _extract_replace_file_request(cleaned_message)
-        if replace_file_request:
-            response = self._queue_pending_action(
-                tool_name="edit_text_file",
-                arguments=replace_file_request,
-                note="Deterministic maintenance intent: replace in file.",
-            )
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
-
-        run_program_request = _extract_run_program_request(cleaned_message)
-        if run_program_request:
-            run_path = str(run_program_request.get("path", ""))
-            if not is_under_roots(run_path, settings.allowed_exec_roots):
-                guided = _path_guided_reply(run_path, cleaned_message)
-                self._history.append({"role": "user", "content": cleaned_message})
-                self._history.append({"role": "assistant", "content": guided})
-                return guided
-
-            response = self._queue_pending_action(
-                tool_name="run_program",
-                arguments=run_program_request,
-                note="Deterministic maintenance intent: run program.",
-            )
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
-
-        if _is_find_junk_request(cleaned_message):
-            report = _deterministic_junk_preview_report(cleaned_message)
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": report})
+        if kind == "antivirus_detect_or_scan":
+            detection = detect_antivirus()
+            if not detection.get("available"):
+                report = _deterministic_antivirus_detect_report()
+                self._record_response(cleaned_message, report)
+                return report
+            provider_args = (payload or {}).get("arguments") or {}
+            result = run_antivirus_quick_scan(**provider_args)
+            report = _format_antivirus_scan_report(result)
+            self._record_response(cleaned_message, report)
             return report
 
-        move_junk_request = _extract_move_junk_request(cleaned_message)
-        if move_junk_request:
-            response = self._queue_pending_action(
-                tool_name="move_junk_to_quarantine",
-                arguments=move_junk_request,
-                note="Deterministic maintenance intent: move junk to quarantine.",
-            )
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
-        if any(
-            pattern.search(" ".join(cleaned_message.strip().split()))
-            for pattern in MOVE_JUNK_PATTERNS
-        ):
-            response = (
-                "Для переміщення сміття в quarantine надай конкретні шляхи.\n"
-                "Приклад: `перемісти сміття в quarantine C:\\Users\\User\\AppData\\Local\\Temp\\old.tmp`."
-            )
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
+        if kind == "path_guidance":
+            path = classification.get("recent_path") or ""
+            reply = _path_guided_reply(path, cleaned_message)
+            self._record_response(cleaned_message, reply)
+            return reply
 
-        delete_junk_request = _extract_delete_junk_request(cleaned_message)
-        if delete_junk_request:
-            response = self._queue_pending_action(
-                tool_name="delete_junk_files",
-                arguments=delete_junk_request,
-                note="Deterministic maintenance intent: delete junk.",
-            )
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
-        if any(
-            pattern.search(" ".join(cleaned_message.strip().split()))
-            for pattern in DELETE_JUNK_PATTERNS
-        ):
-            response = (
-                "Для видалення сміття вкажи шляхи до файлів/папок.\n"
-                "Краще спочатку зробити preview: `знайди сміття`."
-            )
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": response})
-            return response
+        if kind in {"antivirus_update", "antivirus_custom_scan"}:
+            if payload:
+                tool_name = payload.get("tool_name", "")
+                arguments = payload.get("arguments") or {}
+                note = f"Deterministic antivirus intent: {tool_name}."
+                response = self._queue_pending_action(
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    note=note,
+                )
+                self._record_response(normalized_message, response)
+                return response
 
-        recent_path = _find_recent_windows_path(self._history)
-        candidate_path = _extract_windows_path(cleaned_message) or recent_path
-
-        if _looks_like_software_path_request(cleaned_message, recent_path):
-            if candidate_path:
-                operational = _looks_like_operational_request(cleaned_message)
-                if operational and is_under_roots(
-                    candidate_path, settings.allowed_exec_roots
-                ):
+        if kind == "maintenance_or_files":
+            if payload:
+                tool_name = payload.get("tool_name", "")
+                arguments = payload.get("arguments") or {}
+                note = f"Deterministic maintenance intent: {tool_name}."
+                if tool_name == "run_program":
+                    note = "Deterministic maintenance intent: run program."
+                elif tool_name == "pip_install_package":
+                    note = "Deterministic maintenance intent: install package."
+                elif tool_name == "pip_uninstall_package":
+                    note = "Deterministic maintenance intent: uninstall package."
+                elif tool_name == "create_text_file":
+                    note = "Deterministic maintenance intent: create file."
+                elif tool_name == "append_text_file":
+                    note = "Deterministic maintenance intent: append file."
+                elif tool_name == "edit_text_file":
+                    note = "Deterministic maintenance intent: replace in file."
+                elif tool_name == "move_junk_to_quarantine":
+                    note = "Deterministic maintenance intent: move junk to quarantine."
+                elif tool_name == "delete_junk_files":
+                    note = "Deterministic maintenance intent: delete junk."
+                elif tool_name == "antivirus_quick_scan_or_detect":
                     pass
-                else:
-                    guided = _path_guided_reply(candidate_path, cleaned_message)
-                    self._history.append({"role": "user", "content": cleaned_message})
-                    self._history.append({"role": "assistant", "content": guided})
-                    return guided
+                elif tool_name == "list_antivirus_threats":
+                    pass
+                response = self._queue_pending_action(
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    note=note,
+                )
+                self._record_response(normalized_message, response)
+                return response
+            report = _deterministic_junk_preview_report(cleaned_message)
+            self._record_response(cleaned_message, report)
+            return report
 
-        if (
-            recent_path
-            and _looks_like_operational_request(cleaned_message)
-            and not is_under_roots(recent_path, settings.allowed_exec_roots)
-        ):
-            guided = _path_guided_reply(recent_path, cleaned_message)
-            self._history.append({"role": "user", "content": cleaned_message})
-            self._history.append({"role": "assistant", "content": guided})
-            return guided
+        self._record_response(normalized_message, "")
+        return ""
 
-        if classification.get("route") == ROUTE_DETERMINISTIC_SUMMARY:
-            greeting = _greeting_reply(cleaned_message)
-            if greeting is not None:
-                self._history.append({"role": "user", "content": cleaned_message})
-                self._history.append({"role": "assistant", "content": greeting})
-                return greeting
+    def _handle_deterministic_summary(self, classification: dict[str, Any]) -> str:
+        kind = classification.get("kind")
+        cleaned_message = classification.get("cleaned_message") or ""
+        normalized_message = classification.get("normalized_message") or cleaned_message
 
+        if kind == "greeting":
+            reply = _greeting_reply(cleaned_message) or ""
+            self._record_response(cleaned_message, reply)
+            return reply
+
+        if kind == "summary_intent":
             if normalized_message == DIAGNOSTIC_INTENT:
                 report = _deterministic_diagnostic_report(self.scanner, self.inspector)
-                self._history.append({"role": "user", "content": normalized_message})
-                self._history.append({"role": "assistant", "content": report})
+                self._record_response(normalized_message, report)
                 return report
-
             if normalized_message == PROCESS_INTENT:
                 report = _deterministic_process_report(self.scanner)
-                self._history.append({"role": "user", "content": normalized_message})
-                self._history.append({"role": "assistant", "content": report})
+                self._record_response(normalized_message, report)
                 return report
-
             if normalized_message == DISK_INTENT:
                 report = _deterministic_disk_report(self.scanner)
-                self._history.append({"role": "user", "content": normalized_message})
-                self._history.append({"role": "assistant", "content": report})
+                self._record_response(normalized_message, report)
                 return report
-
             if normalized_message == NETWORK_INTENT:
                 report = _deterministic_network_report(self.scanner)
-                self._history.append({"role": "user", "content": normalized_message})
-                self._history.append({"role": "assistant", "content": report})
+                self._record_response(normalized_message, report)
                 return report
-
             if normalized_message == LOGS_INTENT:
                 report = _deterministic_logs_report(limit=5)
-                self._history.append({"role": "user", "content": normalized_message})
-                self._history.append({"role": "assistant", "content": report})
+                self._record_response(normalized_message, report)
                 return report
 
-            if normalized_message == cleaned_message and _is_short_ambiguous_message(
-                cleaned_message
-            ):
-                clarification = _ambiguous_input_reply()
-                self._history.append({"role": "user", "content": cleaned_message})
-                self._history.append({"role": "assistant", "content": clarification})
-                return clarification
+        if kind == "ambiguous":
+            reply = _ambiguous_input_reply()
+            self._record_response(cleaned_message, reply)
+            return reply
 
-        return self._run_llm_reasoning(user_content=normalized_message)
+        self._record_response(normalized_message, "")
+        return ""
 
-    def _run_llm_reasoning(
-        self,
-        *,
-        user_content: str,
-        fallback_reply: Optional[str] = None,
-    ) -> str:
-        self._history.append({"role": "user", "content": user_content})
+    def _handle_llm_reasoning(self, classification: dict[str, Any]) -> str:
+        normalized_message = classification.get("normalized_message") or ""
+        fallback_reply = classification.get("fallback_reply")
+        self._history.append({"role": "user", "content": normalized_message})
         try:
             reply = self._run_agent_loop()
         except Exception as exc:
@@ -1864,13 +1852,29 @@ class MedfarlAgent:
             reply = self._postprocess_reply(reply)
             if fallback_reply is not None and not str(reply).strip():
                 reply = fallback_reply
-
         self._history.append({"role": "assistant", "content": reply})
         return reply
+
+    def _record_response(self, user_content: str, reply: str) -> None:
+        self._history.append({"role": "user", "content": user_content})
+        if reply:
+            self._history.append({"role": "assistant", "content": reply})
 
     def _is_timeout_error(self, exc: Exception) -> bool:
         lowered = str(exc).casefold()
         return "timed out" in lowered or "timeout" in lowered
+
+    def handle_user_message(self, message: str) -> str:
+        classification = self.classify_request(message)
+        route = classification.get("route")
+
+        if route == ROUTE_DETERMINISTIC_ACTION:
+            return self._handle_deterministic_action(classification)
+        if route == ROUTE_DETERMINISTIC_SUMMARY:
+            return self._handle_deterministic_summary(classification)
+        if route == ROUTE_LLM_REASONING:
+            return self._handle_llm_reasoning(classification)
+        return ""
 
     def reset(self) -> None:
         self._bootstrap()
