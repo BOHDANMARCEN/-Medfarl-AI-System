@@ -155,6 +155,8 @@ HELP_PATTERNS = [
     re.compile(r"(?i)^команди$"),
 ]
 
+HELP_MENU_CHOICES = {"1", "2", "3"}
+
 SHORT_ACTION_VERBS = {
     "перевір",
     "покажи",
@@ -218,6 +220,7 @@ OPERATIONAL_REQUEST_WORDS = {
 
 MUTATING_TOOLS = {
     "run_program",
+    "run_antivirus_quick_scan",
     "update_antivirus_definitions",
     "run_antivirus_custom_scan",
     "pip_install_package",
@@ -307,12 +310,14 @@ DELETE_JUNK_PATTERNS = [
 
 SHOW_QUARANTINE_PATTERNS = [
     re.compile(r"(?i)\b(?:show|list)\b.*\bquarantine\b"),
-    re.compile(r"(?i)\b(?:покажи|що\s+в)\b.*\b(?:quarantine|карантин)\b"),
+    re.compile(
+        r"(?i)\b(?:покажи|що\s+в|покажи\s+що\s+в)\b.*\b(?:quarantine|карантин\w*)\b"
+    ),
 ]
 
 RESTORE_QUARANTINE_PATTERNS = [
     re.compile(r"(?i)\brestore\b.*\bquarantine\b"),
-    re.compile(r"(?i)\b(?:віднови|поверни)\b.*\b(?:quarantine|карантин)\b"),
+    re.compile(r"(?i)\b(?:віднови|поверни)\b.*\b(?:quarantine|карантин\w*)\b"),
 ]
 
 QUARANTINE_ENTRY_ID_PATTERN = re.compile(r"\bqk-[0-9a-f]{8}\b", re.IGNORECASE)
@@ -388,6 +393,31 @@ def _help_reply() -> str:
         "- видали пакет requests\n"
         "- запусти C:\\Tools\\scan.exe\n"
         "- show quarantine"
+    )
+
+
+def _maintenance_help_reply() -> str:
+    return (
+        "Добре, ось основні дії обслуговування.\n"
+        "1. файли і папки: `створи файл notes.txt`\n"
+        "2. Python-пакети: `встанови пакет rich`\n"
+        "3. quarantine: `show quarantine` або `віднови з карантину qk-1234abcd`"
+    )
+
+
+def _other_question_reply() -> str:
+    return (
+        "Добре, напиши коротко, що саме потрібно.\n"
+        "Наприклад: `чому комп'ютер повільний?` або `що перевірити в логах?`"
+    )
+
+
+def _looks_like_help_menu_reply(message: str) -> bool:
+    lowered = message.casefold()
+    return (
+        "1. діагностика пк" in lowered
+        and "2. обслуговування / дії" in lowered
+        and "3. інше запитання" in lowered
     )
 
 
@@ -761,7 +791,7 @@ def _extract_restore_quarantine_request(message: str) -> Optional[dict[str, Any]
 
 def _extract_restore_destination_root(message: str) -> Optional[str]:
     lowered = message.casefold()
-    markers = [" destination ", " to ", " у ", " в "]
+    markers = [" destination ", " to ", " до ", " у ", " в "]
     for marker in markers:
         pos = lowered.rfind(marker)
         if pos == -1:
@@ -1097,6 +1127,16 @@ def _find_recent_windows_path(history: List[Dict[str, Any]]) -> Optional[str]:
     return None
 
 
+def _last_assistant_content(history: List[Dict[str, Any]]) -> Optional[str]:
+    for entry in reversed(history):
+        if entry.get("role") != "assistant":
+            continue
+        content = entry.get("content")
+        if isinstance(content, str) and content.strip():
+            return content
+    return None
+
+
 def _looks_like_software_path_request(message: str, recent_path: Optional[str]) -> bool:
     lowered = message.casefold()
     if _extract_windows_path(message):
@@ -1348,6 +1388,7 @@ class MedfarlAgent:
         cleaned_message = message.strip()
         normalized_message = _normalize_intent(cleaned_message)
         control_action, control_id = _parse_control_command(cleaned_message)
+        last_assistant = _last_assistant_content(self._history)
 
         base: dict[str, Any] = {
             "route": None,
@@ -1374,8 +1415,31 @@ class MedfarlAgent:
                 "fallback_reply": _help_reply(),
             }
 
-        if self.approval.has_pending():
-            return {**base, "route": ROUTE_DETERMINISTIC_ACTION, "kind": "pending_gate"}
+        if (
+            cleaned_message in HELP_MENU_CHOICES
+            and last_assistant
+            and _looks_like_help_menu_reply(last_assistant)
+        ):
+            if cleaned_message == "1":
+                return {
+                    **base,
+                    "route": ROUTE_DETERMINISTIC_SUMMARY,
+                    "kind": "summary_intent",
+                    "normalized_message": DIAGNOSTIC_INTENT,
+                }
+            if cleaned_message == "2":
+                return {
+                    **base,
+                    "route": ROUTE_DETERMINISTIC_ACTION,
+                    "kind": "guided_maintenance_menu",
+                    "guided_reply": _maintenance_help_reply(),
+                }
+            return {
+                **base,
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "guided_other_question",
+                "guided_reply": _other_question_reply(),
+            }
 
         guided_maintenance = _guided_maintenance_reply(cleaned_message)
         if guided_maintenance is not None:
@@ -1391,6 +1455,13 @@ class MedfarlAgent:
                 **base,
                 "route": ROUTE_DETERMINISTIC_ACTION,
                 "kind": "show_quarantine",
+            }
+
+        if _is_find_junk_request(cleaned_message):
+            return {
+                **base,
+                "route": ROUTE_DETERMINISTIC_ACTION,
+                "kind": "junk_preview",
             }
 
         restore_request = _extract_restore_quarantine_request(cleaned_message)
@@ -1472,6 +1543,30 @@ class MedfarlAgent:
                 },
             }
 
+        if _greeting_reply(cleaned_message) is not None:
+            return {**base, "route": ROUTE_DETERMINISTIC_SUMMARY, "kind": "greeting"}
+
+        if normalized_message in {
+            DIAGNOSTIC_INTENT,
+            PROCESS_INTENT,
+            DISK_INTENT,
+            NETWORK_INTENT,
+            LOGS_INTENT,
+        }:
+            return {
+                **base,
+                "route": ROUTE_DETERMINISTIC_SUMMARY,
+                "kind": "summary_intent",
+            }
+
+        if normalized_message == cleaned_message and _is_short_ambiguous_message(
+            cleaned_message
+        ):
+            return {**base, "route": ROUTE_DETERMINISTIC_SUMMARY, "kind": "ambiguous"}
+
+        if self.approval.has_pending():
+            return {**base, "route": ROUTE_DETERMINISTIC_ACTION, "kind": "pending_gate"}
+
         if _is_antivirus_quick_scan_request(cleaned_message) or (
             "антивірус" in cleaned_message.casefold()
             or "antivirus" in cleaned_message.casefold()
@@ -1496,7 +1591,6 @@ class MedfarlAgent:
         append_file_req = _extract_append_file_request(cleaned_message)
         replace_file_req = _extract_replace_file_request(cleaned_message)
         run_prog_req = _extract_run_program_request(cleaned_message)
-        find_junk = _is_find_junk_request(cleaned_message)
         move_junk_req = _extract_move_junk_request(cleaned_message)
         delete_junk_req = _extract_delete_junk_request(cleaned_message)
 
@@ -1571,13 +1665,6 @@ class MedfarlAgent:
                 "payload": {"tool_name": "run_program", "arguments": run_prog_req},
             }
 
-        if find_junk:
-            return {
-                **base,
-                "route": ROUTE_DETERMINISTIC_ACTION,
-                "kind": "maintenance_or_files",
-            }
-
         if move_junk_req:
             return {
                 **base,
@@ -1650,27 +1737,6 @@ class MedfarlAgent:
                 "guided_reply": _path_guided_reply(recent_path, cleaned_message),
             }
 
-        if _greeting_reply(cleaned_message) is not None:
-            return {**base, "route": ROUTE_DETERMINISTIC_SUMMARY, "kind": "greeting"}
-
-        if normalized_message in {
-            DIAGNOSTIC_INTENT,
-            PROCESS_INTENT,
-            DISK_INTENT,
-            NETWORK_INTENT,
-            LOGS_INTENT,
-        }:
-            return {
-                **base,
-                "route": ROUTE_DETERMINISTIC_SUMMARY,
-                "kind": "summary_intent",
-            }
-
-        if normalized_message == cleaned_message and _is_short_ambiguous_message(
-            cleaned_message
-        ):
-            return {**base, "route": ROUTE_DETERMINISTIC_SUMMARY, "kind": "ambiguous"}
-
         return {**base, "route": ROUTE_LLM_REASONING, "kind": "open_ended"}
 
     def _handle_deterministic_action(self, classification: dict[str, Any]) -> str:
@@ -1688,21 +1754,38 @@ class MedfarlAgent:
 
         if kind == "control":
             if control_action == "pending":
-                return self._pending_action_reminder()
+                reply = self._pending_action_reminder()
+                self._record_response(cleaned_message, reply)
+                return reply
             if control_action == "history":
-                return self._history_actions_report(control_id)
+                reply = self._history_actions_report(control_id)
+                self._record_response(cleaned_message, reply)
+                return reply
             if control_action == "last":
-                return self._last_action_report()
+                reply = self._last_action_report()
+                self._record_response(cleaned_message, reply)
+                return reply
             if control_action == "approve":
-                return self._approve_pending_action(action_id=control_id)
+                reply = self._approve_pending_action(action_id=control_id)
+                self._record_response(cleaned_message, reply)
+                return reply
             if control_action == "cancel":
-                return self._cancel_pending_action(action_id=control_id)
+                reply = self._cancel_pending_action(action_id=control_id)
+                self._record_response(cleaned_message, reply)
+                return reply
 
         if kind == "pending_gate":
-            return self._pending_action_reminder()
+            reply = self._pending_action_reminder()
+            self._record_response(cleaned_message, reply)
+            return reply
 
         if kind == "show_quarantine":
             report = _deterministic_quarantine_report(limit=20)
+            self._record_response(cleaned_message, report)
+            return report
+
+        if kind == "junk_preview":
+            report = _deterministic_junk_preview_report(cleaned_message)
             self._record_response(cleaned_message, report)
             return report
 
@@ -1743,10 +1826,13 @@ class MedfarlAgent:
                 self._record_response(cleaned_message, report)
                 return report
             provider_args = (payload or {}).get("arguments") or {}
-            result = run_antivirus_quick_scan(**provider_args)
-            report = _format_antivirus_scan_report(result)
-            self._record_response(cleaned_message, report)
-            return report
+            response = self._queue_pending_action(
+                tool_name="run_antivirus_quick_scan",
+                arguments=provider_args,
+                note="Deterministic antivirus intent: quick scan.",
+            )
+            self._record_response(cleaned_message, response)
+            return response
 
         if kind == "path_guidance":
             path = classification.get("recent_path") or ""
@@ -2031,7 +2117,11 @@ class MedfarlAgent:
     def _requires_confirmation(self, tool_name: str) -> bool:
         if tool_name == "run_program":
             return settings.require_confirmation_for_exec
-        if tool_name in {"update_antivirus_definitions", "run_antivirus_custom_scan"}:
+        if tool_name in {
+            "run_antivirus_quick_scan",
+            "update_antivirus_definitions",
+            "run_antivirus_custom_scan",
+        }:
             return settings.require_confirmation_for_exec
         if tool_name in {"pip_install_package", "pip_uninstall_package"}:
             return settings.require_confirmation_for_package_changes
@@ -2054,6 +2144,7 @@ class MedfarlAgent:
             return "high"
         if tool_name in {
             "run_program",
+            "run_antivirus_quick_scan",
             "update_antivirus_definitions",
             "run_antivirus_custom_scan",
             "pip_install_package",
@@ -2071,6 +2162,8 @@ class MedfarlAgent:
     def _build_action_summary(self, tool_name: str, arguments: dict[str, Any]) -> str:
         if tool_name == "run_program":
             return "Запуск програми"
+        if tool_name == "run_antivirus_quick_scan":
+            return "Швидке антивірусне сканування"
         if tool_name == "update_antivirus_definitions":
             return "Оновлення антивірусних баз"
         if tool_name == "run_antivirus_custom_scan":
@@ -2139,6 +2232,15 @@ class MedfarlAgent:
                 "Що: оновлення антивірусних сигнатур.",
                 f"Провайдер: `{provider}`.",
                 "Система спробує оновити бази через структурований antivirus adapter.",
+                f"Ризик: {risk}.",
+            ]
+
+        if tool_name == "run_antivirus_quick_scan":
+            provider = arguments.get("provider") or "auto"
+            return [
+                "Що: запуск швидкого антивірусного сканування.",
+                f"Провайдер: `{provider}`.",
+                "Сканування буде виконано через структурований antivirus adapter після підтвердження.",
                 f"Ризик: {risk}.",
             ]
 

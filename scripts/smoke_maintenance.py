@@ -50,6 +50,18 @@ def main() -> None:
         "Pending action ID should stay unchanged when new mutating request is rejected",
     )
 
+    # read-only flows should stay available while pending exists
+    quarantine_while_pending = agent.handle_user_message("покажи що в карантині")
+    _assert(
+        "quarantine" in quarantine_while_pending.casefold(),
+        "Expected show quarantine to stay available during pending action",
+    )
+    diagnostics_while_pending = agent.handle_user_message("діагностика ПК")
+    _assert(
+        "базову діагностику" in diagnostics_while_pending,
+        "Expected diagnostics to stay available during pending action",
+    )
+
     # wrong id -> safe refusal
     wrong = agent.handle_user_message("approve wrongid")
     _assert("не збігається" in wrong, "Expected ID mismatch safeguard message")
@@ -60,6 +72,11 @@ def main() -> None:
     _assert(
         not agent.approval.has_pending(),
         "Pending action should be cleared after cancel",
+    )
+    stale_approve = agent.handle_user_message(f"approve {pending_id}")
+    _assert(
+        "Немає дії" in stale_approve,
+        "Expected safe refusal for stale approve after cancellation",
     )
 
     # approve -> execute for deterministic create file
@@ -107,16 +124,22 @@ def main() -> None:
     quarantine_entry_id = moved[0].get("entry_id")
     _assert(quarantine_entry_id, "Expected quarantine entry id from move result")
 
-    quarantine_report = agent.handle_user_message("show quarantine")
+    quarantine_report = agent.handle_user_message("покажи що в карантині")
     _assert(
         quarantine_entry_id in quarantine_report,
         "Expected show quarantine to list moved entry id",
     )
 
+    missing_restore = agent.handle_user_message("віднови з карантину qk-deadbeef")
+    _assert(
+        "Не знайшов" in missing_restore,
+        "Expected clear message for missing quarantine entry id",
+    )
+
     restore_target_dir = Path.cwd()
     restore_target = restore_target_dir / temp_junk.name
     restore_request = agent.handle_user_message(
-        f"restore from quarantine {quarantine_entry_id} to {restore_target_dir}"
+        f"віднови з карантину {quarantine_entry_id} до {restore_target_dir}"
     )
     _assert(agent.approval.has_pending(), "Expected pending action for restore request")
     restore_id = agent.approval.pending.id
@@ -131,6 +154,14 @@ def main() -> None:
         "Expected restored junk file to appear in allowed restore destination",
     )
     restore_target.unlink(missing_ok=True)
+
+    restore_again = agent.handle_user_message(
+        f"віднови з карантину {quarantine_entry_id}"
+    )
+    _assert(
+        "Не знайшов" in restore_again,
+        "Expected restored entry to be absent from quarantine on repeated restore",
+    )
 
     # move again -> delete from quarantine
     temp_junk_delete = Path(tempfile.gettempdir()) / "medfarl_smoke_junk_delete.tmp"
@@ -169,9 +200,19 @@ def main() -> None:
     # antivirus deterministic phrase should produce a stable response
     antivirus = agent.handle_user_message("перевір антивірусом")
     _assert(
-        ("антивірус" in antivirus.casefold()) or ("defender" in antivirus.casefold()),
+        ("Action ID" in antivirus)
+        or ("антивірус" in antivirus.casefold())
+        or ("defender" in antivirus.casefold()),
         "Expected antivirus status/scan response",
     )
+    if agent.approval.has_pending():
+        cancel_antivirus = agent.handle_user_message(
+            f"cancel {agent.approval.pending.id}"
+        )
+        _assert(
+            "Скасовано" in cancel_antivirus,
+            "Expected antivirus quick-scan cancellation",
+        )
 
     print("Maintenance smoke tests passed.")
 

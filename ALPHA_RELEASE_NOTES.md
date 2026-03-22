@@ -16,13 +16,16 @@ Current alpha focuses on safe local diagnostics plus guarded maintenance.
   - install/uninstall Python packages
   - create/write/append/edit text files
   - junk preview, quarantine, restore, and delete
+- Interactive help menu with 3 quick choices (`1/2/3`) and deterministic fallback when help LLM calls fail.
 - Antivirus adapters for Windows Defender and ClamAV.
+- Generic antivirus quick scan now goes through explicit approval when a provider is available.
 - Single pending-action policy with:
   - `pending`
   - `approve <action_id>`
   - `cancel <action_id>`
   - `history actions`
   - `last action`
+- Read-only inspection stays available while a mutating action is pending.
 - JSONL audit log for pending, approved, cancelled, and executed actions.
 
 ## Smoke checks

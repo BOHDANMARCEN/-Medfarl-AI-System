@@ -166,7 +166,8 @@ pending
 The default UX is optimized for a short, guided first interaction.
 
 - `привіт` returns a clear next-step menu (overall health, processes, disks, network, logs).
-- `help`, `допомога`, or `що ти ще можеш` routes through LLM reasoning first, with a deterministic capability summary as timeout/error fallback.
+- `help`, `допомога`, or `що ти ще можеш` now returns a short interactive help menu first (`1. діагностика ПК`, `2. обслуговування / дії`, `3. інше запитання`), with the older deterministic capability summary kept as timeout/error fallback.
+- After that interactive help menu, replying with `1`, `2`, or `3` routes into the matching next step.
 - Very short intents are normalized into deterministic actions before LLM reasoning:
   - `діагностикою ПК` → `Зроби загальну діагностику ПК`
   - `процеси` → `Покажи найважчі процеси`
@@ -188,6 +189,7 @@ Maintenance mode keeps system-changing actions explicit and reviewable.
 - Action is queued with an `Action ID`.
 - Nothing mutating runs until you confirm.
 - Only one pending action is supported at a time. New mutating requests are rejected until you `approve` or `cancel` the current one.
+- Read-only flows like diagnostics, help, history, and quarantine inspection remain available while a mutating action is pending.
 
 Use control commands:
 
@@ -217,12 +219,20 @@ Deterministic maintenance intents currently supported:
   - `проскануй папку ...`
   - `покажи загрози`
 
+When an antivirus provider is available, generic quick-scan requests like `перевір антивірусом`
+now queue an `Action ID` and require explicit confirmation before the scan starts.
+
 Junk cleanup stage 2 tools are available and still confirmation-gated:
 
 - `move_junk_to_quarantine(paths)`
 - `show_quarantine(limit)`
 - `restore_from_quarantine(entry_ids, destination_root=None, overwrite=False)`
 - `delete_junk_files(paths, recursive)`
+
+Common Ukrainian aliases now work too:
+
+- `покажи що в карантині`
+- `віднови з карантину qk-1234abcd`
 
 If a maintenance request is incomplete (for example `файл створи` or `встанови пакет`),
 Medfarl now responds with a guided next-step example instead of falling back to a generic ambiguous-input message.

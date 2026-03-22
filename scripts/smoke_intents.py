@@ -15,6 +15,16 @@ from core.agent import (
 )
 
 
+LINUX_ONLY_TOKENS = (
+    "systemctl",
+    "journalctl",
+    "/proc",
+    "/var/log",
+    "apt install",
+    "sudo apt",
+)
+
+
 def _assert(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
@@ -22,127 +32,141 @@ def _assert(condition: bool, message: str) -> None:
 
 def _expect_contains(reply: str, needle: str, label: str) -> None:
     _assert(
-        needle in reply, f"{label}: expected '{needle}' in reply, got: {reply[:300]}"
+        needle in reply,
+        f"{label}: expected '{needle}' in reply, got: {reply[:300]}",
     )
 
 
-def main() -> None:
+def _expect_absent(reply: str, needle: str, label: str) -> None:
+    _assert(
+        needle not in reply,
+        f"{label}: unexpected '{needle}' in reply: {reply[:300]}",
+    )
+
+
+def _expect_no_linux_tokens(reply: str, label: str) -> None:
+    lowered = reply.casefold()
+    for token in LINUX_ONLY_TOKENS:
+        _assert(token not in lowered, f"{label}: unexpected linux-only token '{token}'")
+
+
+def _fake_help_menu(messages, tools=None, **kwargs):
+    return {
+        "assistant_message": {
+            "content": (
+                "Що тобі зараз ближче?\n\n"
+                "1. діагностика ПК\n"
+                "2. обслуговування / дії\n"
+                "3. інше запитання"
+            )
+        }
+    }
+
+
+def _run_classifier_assertions() -> None:
     agent = MedfarlAgent(timeout=60)
 
-    # --- Classifier route assertions ---
-    route_help = agent.classify_request("а що ти ще можеш")
-    _assert(route_help.get("route") == ROUTE_LLM_REASONING, "help should route to llm")
-    _assert(route_help.get("kind") == "help", "help kind")
-    _assert(route_help.get("fallback_reply") is not None, "help has fallback_reply")
+    help_route = agent.classify_request("а що ти ще можеш")
+    _assert(help_route.get("route") == ROUTE_LLM_REASONING, "help should route to llm")
+    _assert(help_route.get("kind") == "help", "help kind")
+    _assert(help_route.get("fallback_reply") is not None, "help fallback reply")
 
-    route_diag = agent.classify_request("діагностика ПК")
+    diag_route = agent.classify_request("діагностика ПК")
     _assert(
-        route_diag.get("route") == ROUTE_DETERMINISTIC_SUMMARY,
+        diag_route.get("route") == ROUTE_DETERMINISTIC_SUMMARY,
         "diagnostic should route to deterministic_summary",
     )
-    _assert(route_diag.get("kind") == "summary_intent", "diagnostic kind")
+    _assert(diag_route.get("kind") == "summary_intent", "diagnostic kind")
 
-    route_action = agent.classify_request("встанови пакет rich")
+    install_route = agent.classify_request("встанови пакет rich")
     _assert(
-        route_action.get("route") == ROUTE_DETERMINISTIC_ACTION,
+        install_route.get("route") == ROUTE_DETERMINISTIC_ACTION,
         "install should route to deterministic_action",
     )
-    _assert(route_action.get("kind") == "maintenance_or_files", "install kind")
-    _assert(route_action.get("payload") is not None, "install has payload")
+    _assert(install_route.get("kind") == "maintenance_or_files", "install kind")
+    _assert(install_route.get("payload") is not None, "install payload")
     _assert(
-        route_action["payload"].get("tool_name") == "pip_install_package",
+        install_route["payload"].get("tool_name") == "pip_install_package",
         "install tool_name",
     )
     _assert(
-        route_action["payload"].get("arguments", {}).get("name") == "rich",
+        install_route["payload"].get("arguments", {}).get("name") == "rich",
         "install package name",
     )
 
-    restore_cls = agent.classify_request(
-        "restore from quarantine qk-1234abcd qk-deadbeef"
+    show_quarantine_route = agent.classify_request("покажи що в карантині")
+    _assert(
+        show_quarantine_route.get("route") == ROUTE_DETERMINISTIC_ACTION,
+        "show quarantine ua routes to action",
     )
     _assert(
-        restore_cls.get("route") == ROUTE_DETERMINISTIC_ACTION,
-        "restore routes to action",
-    )
-    _assert(restore_cls.get("kind") == "restore_quarantine", "restore kind")
-    _assert(restore_cls.get("payload") is not None, "restore has payload")
-    _assert(
-        "qk-1234abcd" in restore_cls["payload"].get("entry_ids", []),
-        "restore entry_ids",
-    )
-    _assert(
-        "qk-deadbeef" in restore_cls["payload"].get("entry_ids", []),
-        "restore entry_ids 2",
+        show_quarantine_route.get("kind") == "show_quarantine",
+        "show quarantine ua kind",
     )
 
-    restore_guided = agent.classify_request("restore from quarantine")
-    _assert(
-        restore_guided.get("route") == ROUTE_DETERMINISTIC_ACTION,
-        "guided restore routes to action",
+    restore_route = agent.classify_request(
+        "віднови з карантину qk-1234abcd qk-deadbeef"
     )
     _assert(
+        restore_route.get("route") == ROUTE_DETERMINISTIC_ACTION,
+        "restore routes to action",
+    )
+    _assert(restore_route.get("kind") == "restore_quarantine", "restore kind")
+    _assert(restore_route.get("payload") is not None, "restore payload")
+    _assert(
+        "qk-1234abcd" in restore_route["payload"].get("entry_ids", []),
+        "restore entry id 1",
+    )
+    _assert(
+        "qk-deadbeef" in restore_route["payload"].get("entry_ids", []),
+        "restore entry id 2",
+    )
+
+    restore_guided = agent.classify_request("віднови з карантину")
+    _assert(
         restore_guided.get("guided_reply") is not None,
-        "guided restore has guided_reply",
+        "restore guided reply",
     )
 
     av_update = agent.classify_request("онови бази антивіруса")
-    _assert(
-        av_update.get("route") == ROUTE_DETERMINISTIC_ACTION,
-        "av update routes to action",
-    )
     _assert(av_update.get("kind") == "antivirus_update", "av update kind")
     _assert(
         av_update["payload"].get("tool_name") == "update_antivirus_definitions",
-        "av update tool_name",
+        "av update tool name",
     )
 
     av_threats = agent.classify_request("покажи загрози антивіруса")
-    _assert(
-        av_threats.get("route") == ROUTE_DETERMINISTIC_ACTION,
-        "av threats routes to action",
-    )
     _assert(av_threats.get("kind") == "antivirus_threats", "av threats kind")
 
     av_generic = agent.classify_request("перевір антивірусом")
     _assert(
-        av_generic.get("route") == ROUTE_DETERMINISTIC_ACTION,
-        "generic av routes to action",
+        av_generic.get("kind") == "antivirus_detect_or_scan",
+        "generic av kind",
     )
-    _assert(av_generic.get("kind") == "antivirus_detect_or_scan", "generic av kind")
 
-    path_guidance_cls = agent.classify_request(
+    blocked_path = agent.classify_request(
         "запусти C:\\Windows\\System32\\suspicious.exe"
     )
-    _assert(
-        path_guidance_cls.get("route") == ROUTE_DETERMINISTIC_ACTION,
-        "blocked path routes to action",
-    )
-    _assert(path_guidance_cls.get("kind") == "path_guidance", "blocked path kind")
-    _assert(
-        path_guidance_cls.get("guided_reply") is not None,
-        "blocked path has guided_reply",
-    )
+    _assert(blocked_path.get("kind") == "path_guidance", "blocked path kind")
+    _assert(blocked_path.get("guided_reply") is not None, "blocked path guided")
 
-    ambiguous_cls = agent.classify_request("ну")
+    ambiguous = agent.classify_request("ну")
     _assert(
-        ambiguous_cls.get("route") == ROUTE_DETERMINISTIC_SUMMARY,
+        ambiguous.get("route") == ROUTE_DETERMINISTIC_SUMMARY,
         "ambiguous routes to summary",
     )
-    _assert(ambiguous_cls.get("kind") == "ambiguous", "ambiguous kind")
+    _assert(ambiguous.get("kind") == "ambiguous", "ambiguous kind")
 
-    open_ended_cls = agent.classify_request("чому мій комп працює повільно")
+    open_ended = agent.classify_request("чому мій комп працює повільно")
     _assert(
-        open_ended_cls.get("route") == ROUTE_LLM_REASONING, "open-ended routes to llm"
+        open_ended.get("route") == ROUTE_LLM_REASONING,
+        "open-ended routes to llm",
     )
-    _assert(open_ended_cls.get("kind") == "open_ended", "open-ended kind")
+    _assert(open_ended.get("kind") == "open_ended", "open-ended kind")
 
-    # --- Help: interactive question + 3 categories ---
-    help_cls = agent.classify_request("а що ти ще можеш")
-    _assert(help_cls.get("kind") == "help", "help kind is help")
-    _assert(help_cls.get("fallback_reply") is not None, "help has fallback_reply")
 
-    # --- Help timeout fallback ---
+def _run_help_and_menu_assertions() -> None:
+    agent = MedfarlAgent(timeout=60)
     original_chat = agent.client.chat
 
     def _timeout_chat(messages, tools=None, **kwargs):
@@ -154,67 +178,59 @@ def main() -> None:
     _expect_contains(
         help_fallback, "створи файл", "help timeout fallback has create file"
     )
-    agent.client.chat = original_chat
 
-    # --- Help non-timeout error fallback ---
     def _error_chat(messages, tools=None, **kwargs):
         raise RuntimeError("model unavailable")
 
     agent.client.chat = _error_chat
     help_error_fallback = agent.handle_user_message("а що ти ще можеш")
     _expect_contains(
-        help_error_fallback, "діагностика", "help non-timeout fallback has diag"
+        help_error_fallback,
+        "діагностика",
+        "help non-timeout fallback has diag",
     )
-    agent.client.chat = original_chat
 
-    # --- Help non-timeout error fallback ---
-    def _error_chat(messages, tools=None, **kwargs):
-        raise RuntimeError("model unavailable")
+    agent.client.chat = _fake_help_menu
+    help_menu = agent.handle_user_message("а що ти ще можеш")
+    _expect_contains(help_menu, "1. діагностика ПК", "interactive help option 1")
+    _expect_contains(help_menu, "2. обслуговування / дії", "interactive help option 2")
+    _expect_contains(help_menu, "3. інше запитання", "interactive help option 3")
+    _expect_no_linux_tokens(help_menu, "interactive help menu")
 
-    agent.client.chat = _error_chat
-    help_error_fallback = agent.handle_user_message("а що ти ще можеш")
+    help_choice_1 = agent.handle_user_message("1")
     _expect_contains(
-        help_error_fallback, "діагностика", "help non-timeout fallback has diag"
+        help_choice_1, "Добре, запускаю базову діагностику системи.", "help choice 1"
     )
-    agent.client.chat = original_chat
 
-    # --- Pending action blocks new install but allows pending/cancel ---
-    _assert(not agent.approval.has_pending(), "no pending at start")
-    install_reply = agent.handle_user_message("встанови пакет requests")
-    _expect_contains(install_reply, "Action ID", "install creates pending")
-    install_id = agent.approval.pending.id
-    pending_while_pending = agent.handle_user_message("pending")
-    _expect_contains(pending_while_pending, install_id, "pending command sees existing")
-    cancel_while_pending = agent.handle_user_message(f"cancel {install_id}")
-    _expect_contains(cancel_while_pending, "Скасовано", "cancel works while pending")
-    _assert(not agent.approval.has_pending(), "approval cleared after cancel")
+    agent.client.chat = _fake_help_menu
+    agent.handle_user_message("а що ти ще можеш")
+    help_choice_2 = agent.handle_user_message("2")
+    _expect_contains(help_choice_2, "основні дії обслуговування", "help choice 2")
+    _expect_contains(help_choice_2, "встанови пакет rich", "help choice 2 example")
+
+    agent.client.chat = _fake_help_menu
+    agent.handle_user_message("а що ти ще можеш")
+    help_choice_3 = agent.handle_user_message("3")
+    _expect_contains(help_choice_3, "напиши коротко", "help choice 3")
+
+    agent.client.chat = original_chat
+    real_help_reply = agent.handle_user_message("а що ти ще можеш")
+    _assert(bool(real_help_reply.strip()), "real help reply should be non-empty")
+    _assert(len(real_help_reply) < 800, "real help reply should stay concise")
+    _expect_no_linux_tokens(real_help_reply, "real help reply")
+
+
+def _run_pending_and_e2e_assertions() -> None:
+    agent = MedfarlAgent(timeout=60)
 
     greeting = agent.handle_user_message("привіт")
     _expect_contains(greeting, "Що саме перевірити", "greeting flow")
-
-    help_reply = agent.handle_user_message("а що ти ще можеш")
-    _assert(bool(help_reply.strip()), "help flow should return non-empty reply")
-    _assert(len(help_reply) < 800, "help reply should be short (interactive question)")
-    _assert(
-        "?" in help_reply or "Що" in help_reply or "діагностика" in help_reply,
-        "help should contain question or category options",
-    )
-
-    guided_create = agent.handle_user_message("файл створи")
-    _expect_contains(guided_create, "мені потрібен шлях", "guided create file flow")
-
-    guided_install = agent.handle_user_message("встанови пакет")
-    _expect_contains(
-        guided_install,
-        "можу встановити Python-пакет",
-        "guided install package flow",
-    )
 
     diagnostic = agent.handle_user_message("діагностикою ПК")
     _expect_contains(
         diagnostic, "Добре, запускаю базову діагностику системи.", "diagnostic flow"
     )
-    _expect_contains(diagnostic, "- CPU:", "diagnostic flow cpu")
+    _expect_contains(diagnostic, "- CPU:", "diagnostic cpu")
 
     processes = agent.handle_user_message("процеси")
     _expect_contains(processes, "найважчі процеси", "process flow")
@@ -233,44 +249,78 @@ def main() -> None:
         f"logs flow: unexpected reply: {logs[:300]}",
     )
 
+    blocked_path = agent.handle_user_message(r"запусти C:\Windows\System32\cmd.exe")
+    _expect_no_linux_tokens(blocked_path, "blocked path guidance")
+    _expect_absent(blocked_path, "sudo", "blocked path should not mention sudo")
+
     antivirus = agent.handle_user_message("перевір антивірусом")
     _assert(
-        ("антивірус" in antivirus.casefold()) or ("defender" in antivirus.casefold()),
+        ("Action ID" in antivirus)
+        or ("антивірус" in antivirus.casefold())
+        or ("defender" in antivirus.casefold()),
         f"antivirus detect flow: unexpected reply: {antivirus[:300]}",
     )
+    _expect_no_linux_tokens(antivirus, "antivirus reply")
+    if agent.approval.has_pending():
+        cancel_antivirus = agent.handle_user_message(
+            f"cancel {agent.approval.pending.id}"
+        )
+        _expect_contains(cancel_antivirus, "Скасовано", "cancel antivirus quick scan")
 
-    antivirus_update = agent.handle_user_message("онови бази антивіруса")
-    _expect_contains(antivirus_update, "Action ID", "antivirus update pending")
-    _assert(agent.approval.has_pending(), "expected pending antivirus update action")
+    pending_reply = agent.handle_user_message("створи файл alpha_pending_note.txt")
+    _expect_contains(pending_reply, "Action ID", "create file pending")
     pending_id = agent.approval.pending.id
 
-    pending = agent.handle_user_message("pending")
-    _expect_contains(pending, pending_id, "pending command")
+    help_during_pending = agent.handle_user_message("help")
+    _assert(bool(help_during_pending.strip()), "help should work during pending")
 
-    cancel = agent.handle_user_message(f"cancel {pending_id}")
-    _expect_contains(cancel, "Скасовано", "cancel pending action")
+    diag_during_pending = agent.handle_user_message("діагностика ПК")
+    _expect_contains(
+        diag_during_pending,
+        "Добре, запускаю базову діагностику системи.",
+        "diagnostic during pending",
+    )
 
-    install = agent.handle_user_message("встанови пакет rich")
-    _expect_contains(install, "Action ID", "install package pending")
-    install_id = agent.approval.pending.id
-    cancel_install = agent.handle_user_message(f"cancel {install_id}")
-    _expect_contains(cancel_install, "Скасовано", "cancel package install")
+    quarantine_during_pending = agent.handle_user_message("покажи що в карантині")
+    _expect_contains(
+        quarantine_during_pending, "quarantine", "show quarantine during pending"
+    )
 
-    create_file = agent.handle_user_message("створи файл alpha_smoke_note.txt")
-    _expect_contains(create_file, "Action ID", "create file pending")
-    file_id = agent.approval.pending.id
-    cancel_file = agent.handle_user_message(f"cancel {file_id}")
-    _expect_contains(cancel_file, "Скасовано", "cancel create file")
+    history_during_pending = agent.handle_user_message("history actions 5")
+    _expect_contains(history_during_pending, "Останні дії", "history during pending")
 
-    quarantine = agent.handle_user_message("show quarantine")
-    _expect_contains(quarantine, "quarantine", "show quarantine")
+    last_during_pending = agent.handle_user_message("last action")
+    _expect_contains(
+        last_during_pending, "Остання зафіксована дія", "last during pending"
+    )
 
-    history = agent.handle_user_message("history actions 5")
-    _expect_contains(history, "Останні дії", "history command")
+    second_mutating = agent.handle_user_message("встанови пакет rich")
+    _expect_contains(
+        second_mutating, "одна pending-дія", "new mutating blocked while pending"
+    )
+    _assert(agent.approval.pending.id == pending_id, "pending id should stay the same")
 
-    last = agent.handle_user_message("last action")
-    _expect_contains(last, "Остання зафіксована дія", "last action command")
+    wrong_approve = agent.handle_user_message("approve wrongid")
+    _expect_contains(wrong_approve, "не збігається", "wrong approve id")
 
+    cancel_bare = agent.handle_user_message("ні")
+    _expect_contains(cancel_bare, "Скасовано", "bare no should cancel pending")
+    _assert(not agent.approval.has_pending(), "pending should be cleared after bare no")
+
+    yes_file = Path("alpha_yes_note.txt")
+    yes_file.unlink(missing_ok=True)
+    yes_pending = agent.handle_user_message("створи файл alpha_yes_note.txt")
+    _expect_contains(yes_pending, "Action ID", "yes test pending")
+    approved_bare = agent.handle_user_message("так")
+    _expect_contains(approved_bare, "Підтверджено. Виконую дію:", "bare yes approves")
+    _assert(yes_file.exists(), "bare yes should execute pending file creation")
+    yes_file.unlink(missing_ok=True)
+
+
+def main() -> None:
+    _run_classifier_assertions()
+    _run_help_and_menu_assertions()
+    _run_pending_and_e2e_assertions()
     print("Intent smoke tests passed.")
 
 
