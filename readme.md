@@ -31,6 +31,7 @@ explicit approval.
 - [Safety model](#safety-model)
 - [Supported platforms](#supported-platforms)
 - [Extending Medfarl](#extending-medfarl)
+- [Authors and Core Development Team](#authors-and-core-development-team)
 - [Known limitations](#known-limitations)
 - [Roadmap](#roadmap)
 
@@ -703,6 +704,15 @@ SAFE_COMMANDS: Dict[str, List[str]] = {
 Edit `SYSTEM_PROMPT` in `core/agent.py`. The prompt instructs the model on its role,
 what tools to prefer, and what rules to follow. Keep it concise — overly long system
 prompts reduce instruction-following quality on smaller models.
+
+---
+
+## Authors and Core Development Team
+
+### Primary Authors
+
+- **Bohdan Marchen** — founder and lead developer. Responsible for the product vision, architecture, engineering, and the overall core system design.
+- **ChatGPT 5.2** — AI architect and co-developer. Contributed to the system architecture, specifications, documentation, and reasoning mechanism design.
 
 ---
 
