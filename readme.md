@@ -4,6 +4,8 @@
 
 > Deep local diagnostics. Zero cloud. All analysis stays on your machine.
 
+Current prerelease: `v0.2.0-alpha` - see `CHANGELOG.md` for release notes.
+
 Medfarl is a chat-first terminal diagnostic assistant that runs a local LLM as an
 agent with controlled tool access to your system. You can speak to it naturally, and
 it decides whether to answer directly, ask one concise clarifying question, use tools,
@@ -28,6 +30,7 @@ explicit approval.
 - [Project structure](#project-structure)
 - [Architecture deep dive](#architecture-deep-dive)
 - [Tool reference](#tool-reference)
+- [Changelog](CHANGELOG.md)
 - [Safety model](#safety-model)
 - [Supported platforms](#supported-platforms)
 - [Extending Medfarl](#extending-medfarl)
