@@ -519,9 +519,7 @@ def _last_user_language(history: List[Dict[str, Any]]) -> Optional[str]:
 def _detect_language(text: str, history: Optional[List[Dict[str, Any]]] = None) -> str:
     lowered = text.casefold()
     words = set(re.findall(r"[A-Za-zА-Яа-яІіЇїЄєҐґ']{2,}", lowered))
-    cyrillic_words = [
-        word for word in words if re.search(r"[А-Яа-яІіЇїЄєҐґ]", word)
-    ]
+    cyrillic_words = [word for word in words if re.search(r"[А-Яа-яІіЇїЄєҐґ]", word)]
 
     if re.search(r"[іїєґ]", lowered):
         return LANG_UK
@@ -1294,9 +1292,7 @@ def _deterministic_junk_preview_report(message: str, lang: str) -> str:
         )
         return "\n".join(lines)
 
-    lines.append(
-        _t(lang, "- Топ елементи:", "- Топ элементы:", "- Top items:")
-    )
+    lines.append(_t(lang, "- Топ елементи:", "- Топ элементы:", "- Top items:"))
     for item in items[:5]:
         path = item.get("path", "")
         size = float(item.get("size_bytes", 0)) / 1024**2
@@ -2243,7 +2239,9 @@ class MedfarlAgent:
             }
 
         if _is_path_only_input(cleaned_message):
-            if candidate_path and is_under_roots(candidate_path, settings.allowed_read_roots):
+            if candidate_path and is_under_roots(
+                candidate_path, settings.allowed_read_roots
+            ):
                 return {
                     **base,
                     "route": ROUTE_CLARIFICATION,
@@ -2584,7 +2582,9 @@ class MedfarlAgent:
             elif control_action == "last":
                 reply = self._last_action_report(language)
             elif control_action == "approve":
-                reply = self._approve_pending_action(action_id=control_id, lang=language)
+                reply = self._approve_pending_action(
+                    action_id=control_id, lang=language
+                )
             else:
                 reply = self._cancel_pending_action(action_id=control_id, lang=language)
             self._record_response(cleaned_message, reply)
@@ -2696,7 +2696,11 @@ class MedfarlAgent:
             self._record_response(cleaned_message, response)
             return response
 
-        if kind in {"antivirus_update", "antivirus_custom_scan", "maintenance_or_files"}:
+        if kind in {
+            "antivirus_update",
+            "antivirus_custom_scan",
+            "maintenance_or_files",
+        }:
             if payload:
                 response = self._queue_pending_action(
                     tool_name=payload.get("tool_name", ""),
@@ -2945,11 +2949,38 @@ class MedfarlAgent:
         ]
         if planning_note:
             extra_system.append({"role": "system", "content": planning_note})
-        return [{"role": "system", "content": SYSTEM_PROMPT}, *extra_system, *self._history]
+        return [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            *extra_system,
+            *self._history,
+        ]
 
     def _friendly_runtime_error(self, exc: Exception, lang: str) -> str:
         text = str(exc).strip()
         lowered = text.casefold()
+        if self._is_ollama_unavailable_error(exc) or (
+            ("timed out" in lowered or "timeout" in lowered)
+            and self._is_ollama_server_unreachable()
+        ):
+            base_url = getattr(self.client, "base_url", settings.llm_url)
+            return _t(
+                lang,
+                "Не вдається підключитися до локального LLM (Ollama).\n"
+                f"- Адреса: {base_url}\n"
+                "- Переконайся, що Ollama запущений.\n"
+                "- Можеш перевірити командою: `python main.py --healthcheck`\n"
+                "- Поки Ollama недоступний, спробуй deterministic запити: `привіт`, `діагностика ПК`, `процеси`, `покажи що в карантині`.",
+                "Не удается подключиться к локальному LLM (Ollama).\n"
+                f"- Адрес: {base_url}\n"
+                "- Убедись, что Ollama запущен.\n"
+                "- Можешь проверить командой: `python main.py --healthcheck`\n"
+                "- Пока Ollama недоступен, попробуй deterministic запросы: `привет`, `діагностика ПК`, `процеси`, `покажи що в карантині`.",
+                "Could not connect to the local LLM (Ollama).\n"
+                f"- Address: {base_url}\n"
+                "- Make sure Ollama is running.\n"
+                "- You can check it with: `python main.py --healthcheck`\n"
+                "- While Ollama is unavailable, try deterministic requests such as `hello`, `PC diagnostics`, `processes`, or `show quarantine`.",
+            )
         if "timed out" in lowered or "timeout" in lowered:
             return _t(
                 lang,
@@ -2963,6 +2994,29 @@ class MedfarlAgent:
             f"Не удалось завершить запрос: {text}",
             f"Could not complete the request: {text}",
         )
+
+    def _is_ollama_unavailable_error(self, exc: Exception) -> bool:
+        lowered = str(exc).casefold()
+        markers = (
+            "winerror 10061",
+            "connection refused",
+            "connecterror",
+            "all connection attempts failed",
+            "failed to establish a new connection",
+            "nodename nor servname provided",
+            "temporary failure in name resolution",
+        )
+        return any(marker in lowered for marker in markers)
+
+    def _is_ollama_server_unreachable(self) -> bool:
+        probe = getattr(self.client, "server_check", None)
+        if not callable(probe):
+            return False
+        try:
+            result = probe(timeout=3)
+        except Exception:
+            return False
+        return not bool(result.get("reachable"))
 
     def _postprocess_reply(self, reply: str, lang: str) -> str:
         model_name = getattr(self.client, "model", "")
@@ -3707,7 +3761,9 @@ class MedfarlAgent:
                 "Последнее зафиксированное действие:",
                 "Last recorded action:",
             ),
-            _t(lang, f"- Подія: {event}.", f"- Событие: {event}.", f"- Event: {event}."),
+            _t(
+                lang, f"- Подія: {event}.", f"- Событие: {event}.", f"- Event: {event}."
+            ),
             _t(
                 lang,
                 f"- ID дії: {action_id}.",
@@ -3720,7 +3776,12 @@ class MedfarlAgent:
                 f"- Инструмент: {tool}.",
                 f"- Tool: {tool}.",
             ),
-            _t(lang, f"- Час: {timestamp}.", f"- Время: {timestamp}.", f"- Time: {timestamp}."),
+            _t(
+                lang,
+                f"- Час: {timestamp}.",
+                f"- Время: {timestamp}.",
+                f"- Time: {timestamp}.",
+            ),
         ]
         if note:
             lines.append(

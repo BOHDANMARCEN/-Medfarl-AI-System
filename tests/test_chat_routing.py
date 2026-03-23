@@ -98,7 +98,11 @@ class FakeClient:
 
     def chat(self, messages, tools=None):
         last_user = next(
-            (entry.get("content", "") for entry in reversed(messages) if entry.get("role") == "user"),
+            (
+                entry.get("content", "")
+                for entry in reversed(messages)
+                if entry.get("role") == "user"
+            ),
             "",
         )
         self.calls.append({"last_user": last_user, "tool_mode": bool(tools)})
@@ -107,7 +111,10 @@ class FakeClient:
             if self._tool_turns == 0:
                 self._tool_turns += 1
                 return {
-                    "assistant_message": {"role": "assistant", "content": "Перевіряю процеси."},
+                    "assistant_message": {
+                        "role": "assistant",
+                        "content": "Перевіряю процеси.",
+                    },
                     "tool_call": {
                         "name": "get_top_processes",
                         "arguments": {"count": 3},
@@ -134,6 +141,31 @@ class FakeClient:
             },
             "tool_call": None,
             "tool_call_id": None,
+        }
+
+
+class UnavailableClient:
+    def __init__(self) -> None:
+        self.model = "fake-model"
+        self.base_url = "http://localhost:11434"
+
+    def chat(self, messages, tools=None):
+        raise RuntimeError("[WinError 10061] Connection refused")
+
+
+class UnavailableTimeoutClient:
+    def __init__(self) -> None:
+        self.model = "fake-model"
+        self.base_url = "http://localhost:11434"
+
+    def chat(self, messages, tools=None):
+        raise TimeoutError("timed out")
+
+    def server_check(self, timeout=3):
+        return {
+            "reachable": False,
+            "base_url": self.base_url,
+            "error": "connection refused",
         }
 
 
@@ -225,6 +257,26 @@ class ChatRoutingTests(unittest.TestCase):
         self.assertEqual(plan["kind"], "open_ended")
         self.assertIn("browser.exe", reply.lower())
         self.assertTrue(any(call["tool_mode"] for call in client.calls))
+
+    def test_unavailable_ollama_returns_friendly_runtime_message(self) -> None:
+        agent = self._make_agent(client=UnavailableClient())
+
+        reply = agent.handle_user_message("що жере RAM")
+
+        self.assertIn("Ollama", reply)
+        self.assertIn("healthcheck", reply)
+        self.assertIn("процеси", reply)
+
+    def test_timeout_with_unreachable_ollama_returns_friendly_runtime_message(
+        self,
+    ) -> None:
+        agent = self._make_agent(client=UnavailableTimeoutClient())
+
+        reply = agent.handle_user_message("what uses RAM")
+
+        self.assertIn("Ollama", reply)
+        self.assertIn("healthcheck", reply)
+        self.assertIn("show quarantine", reply)
 
 
 if __name__ == "__main__":

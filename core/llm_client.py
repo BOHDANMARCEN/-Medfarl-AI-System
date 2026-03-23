@@ -166,6 +166,18 @@ class LLMClient:
         result["ok"] = True
         return result
 
+    def server_check(self, timeout: int = 3) -> Dict[str, Any]:
+        try:
+            response = httpx.get(f"{self.base_url}/api/tags", timeout=timeout)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            return {
+                "reachable": False,
+                "base_url": self.base_url,
+                "error": str(exc),
+            }
+        return {"reachable": True, "base_url": self.base_url}
+
     def list_models(self) -> List[str]:
         response = httpx.get(f"{self.base_url}/api/tags", timeout=min(self.timeout, 10))
         response.raise_for_status()

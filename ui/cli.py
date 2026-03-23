@@ -39,7 +39,7 @@ def configure_console() -> None:
         except Exception:
             pass
 
-    for stream_name in ("stdout", "stderr"):
+    for stream_name in ("stdin", "stdout", "stderr"):
         stream = getattr(sys, stream_name, None)
         if stream is None:
             continue
