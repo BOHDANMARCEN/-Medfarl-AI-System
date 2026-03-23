@@ -751,10 +751,12 @@ prompts reduce instruction-following quality on smaller models.
 
 ## Authors and Core Development Team
 
-### Primary Authors
+**🧑‍💻 Автори та команда основних розробників**
 
-- **Bohdan Marchen** — founder and lead developer. Responsible for the product vision, architecture, engineering, and the overall core system design.
-- **ChatGPT 5.2** — AI architect and co-developer. Contributed to the system architecture, specifications, documentation, and reasoning mechanism design.
+### Основні автори
+
+- **Богдан Марценюк** — засновник і провідний розробник. Бачення, архітектура, інженерія, дизайн основної системи.
+- **ChatGPT 5.4 Thinking** — архітектор та співрозробник ШІ. Архітектура системи, специфікації, документація, проектування механізму міркування.
 
 ---
 
