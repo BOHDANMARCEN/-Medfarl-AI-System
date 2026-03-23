@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import string
 from dataclasses import dataclass, field
 
 
@@ -13,6 +14,18 @@ def _env_flag(name: str, default: bool = True) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _all_filesystem_roots() -> list[str]:
+    if os.name == "nt":
+        roots = [
+            f"{letter}:\\"
+            for letter in string.ascii_uppercase
+            if os.path.exists(f"{letter}:\\")
+        ]
+        if roots:
+            return roots
+    return [os.path.abspath(os.sep)]
 
 
 @dataclass
@@ -51,6 +64,11 @@ class Settings:
     junk_quarantine_dir: str = os.getenv(
         "MEDFARL_JUNK_QUARANTINE_DIR", os.path.join(os.getcwd(), "junk_quarantine")
     )
+    unsafe_full_access: bool = _env_flag("MEDFARL_UNSAFE_FULL_ACCESS", False)
+
+    def __post_init__(self) -> None:
+        if self.unsafe_full_access:
+            self.enable_unsafe_full_access()
 
     @property
     def llm_base_url(self) -> str:
@@ -71,6 +89,17 @@ class Settings:
     @property
     def allowed_paths(self) -> list[str]:
         return self.allowed_read_roots
+
+    def enable_unsafe_full_access(self) -> None:
+        self.unsafe_full_access = True
+        roots = _all_filesystem_roots()
+        self.allowed_read_roots = list(roots)
+        self.allowed_edit_roots = list(roots)
+        self.allowed_exec_roots = list(roots)
+        self.require_confirmation_for_exec = False
+        self.require_confirmation_for_delete = False
+        self.require_confirmation_for_package_changes = False
+        self.require_confirmation_for_file_edits = False
 
 
 settings = Settings()

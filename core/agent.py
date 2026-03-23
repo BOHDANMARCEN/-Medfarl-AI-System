@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import platform
 import re
+import uuid
 from typing import Any, Dict, List, Optional
 
 from config import settings
@@ -115,6 +116,16 @@ Rules:
 - Provide the safest next concrete manual step.
 - If useful, ask one short follow-up question.
 - Do not invent commands, services, files, or execution results.
+"""
+
+UNSAFE_FULL_ACCESS_PROMPT = """\
+Unsafe full access mode is enabled.
+
+- Full local filesystem access is available through the registered file tools.
+- Local shell access is available through registered shell tools.
+- Program execution is available without approval gating.
+- Do not pretend a restriction exists if unsafe mode disables it.
+- Still prefer real tool output over guessing.
 """
 
 
@@ -240,6 +251,7 @@ OPERATIONAL_REQUEST_WORDS = {
 
 MUTATING_TOOLS = {
     "run_program",
+    "run_shell_command",
     "run_antivirus_quick_scan",
     "update_antivirus_definitions",
     "run_antivirus_custom_scan",
@@ -1034,8 +1046,19 @@ def _extract_run_program_request(message: str) -> Optional[dict[str, Any]]:
     path = _extract_windows_path(compact)
     if not path:
         quoted = _extract_quoted_text(compact)
-        if quoted and quoted.casefold().endswith(".exe"):
+        allowed_suffixes = (
+            (".exe", ".cmd", ".bat", ".com")
+            if settings.unsafe_full_access
+            else (".exe",)
+        )
+        if quoted and quoted.casefold().endswith(allowed_suffixes):
             path = quoted
+    if not path and settings.unsafe_full_access:
+        tokens = compact.split()
+        if len(tokens) >= 2:
+            candidate = tokens[1].strip("`'\"")
+            if candidate:
+                path = candidate
     if not path:
         return None
 
@@ -1056,6 +1079,37 @@ def _extract_run_program_request(message: str) -> Optional[dict[str, Any]]:
     if args:
         payload["args"] = args
     return payload
+
+
+def _extract_shell_command_request(message: str) -> Optional[dict[str, Any]]:
+    if not settings.unsafe_full_access:
+        return None
+
+    compact = message.strip()
+    if not compact:
+        return None
+
+    cmd_match = re.match(r"(?is)^cmd(?:\.exe)?\s+(.+)$", compact)
+    if cmd_match:
+        return {
+            "tool_name": "run_shell_command",
+            "arguments": {
+                "shell": "cmd",
+                "command": cmd_match.group(1).strip(),
+            },
+        }
+
+    powershell_match = re.match(r"(?is)^(?:powershell(?:\.exe)?|pwsh)\s+(.+)$", compact)
+    if powershell_match:
+        return {
+            "tool_name": "run_shell_command",
+            "arguments": {
+                "shell": "powershell",
+                "command": powershell_match.group(1).strip(),
+            },
+        }
+
+    return None
 
 
 def _is_find_junk_request(message: str) -> bool:
@@ -2154,6 +2208,7 @@ class MedfarlAgent:
         language = _detect_language(cleaned_message, self._history)
         recent_path = _find_recent_windows_path(self._history)
         candidate_path = _extract_candidate_path(cleaned_message) or recent_path
+        shell_request = _extract_shell_command_request(cleaned_message)
 
         base: dict[str, Any] = {
             "route": None,
@@ -2205,6 +2260,14 @@ class MedfarlAgent:
                 "route": ROUTE_DIRECT_RESPONSE,
                 "kind": "help_menu",
                 "direct_reply": _help_menu_reply(language),
+            }
+
+        if shell_request:
+            return {
+                **base,
+                "route": ROUTE_TOOL_USE,
+                "kind": "maintenance_or_files",
+                "payload": shell_request,
             }
 
         greeting_reply = _greeting_reply(cleaned_message, language)
@@ -2737,6 +2800,11 @@ class MedfarlAgent:
                 "role": "system",
                 "content": f"{DIRECT_RESPONSE_PROMPT}\nReply in {_language_name(lang)}.",
             },
+            *(
+                [{"role": "system", "content": UNSAFE_FULL_ACCESS_PROMPT}]
+                if settings.unsafe_full_access
+                else []
+            ),
             *self._history,
             {"role": "user", "content": message},
         ]
@@ -2755,6 +2823,11 @@ class MedfarlAgent:
                 "role": "system",
                 "content": f"{GUIDED_MANUAL_PROMPT}\nReply in {_language_name(lang)}.",
             },
+            *(
+                [{"role": "system", "content": UNSAFE_FULL_ACCESS_PROMPT}]
+                if settings.unsafe_full_access
+                else []
+            ),
             {"role": "user", "content": message},
         ]
         response = self.client.chat(messages=messages, tools=None)
@@ -2769,6 +2842,11 @@ class MedfarlAgent:
         tool_names = ", ".join(tool.name for tool in self.tool_registry)
         messages = [
             {"role": "system", "content": PLANNER_PROMPT},
+            *(
+                [{"role": "system", "content": UNSAFE_FULL_ACCESS_PROMPT}]
+                if settings.unsafe_full_access
+                else []
+            ),
             {
                 "role": "user",
                 "content": (
@@ -2776,6 +2854,7 @@ class MedfarlAgent:
                     f"Platform: {platform.system()}\n"
                     f"Allowed read roots: {', '.join(settings.allowed_read_roots)}\n"
                     f"Allowed exec roots: {', '.join(settings.allowed_exec_roots)}\n"
+                    f"Unsafe full access mode: {'on' if settings.unsafe_full_access else 'off'}\n"
                     f"Available tools: {tool_names}\n"
                     f"Latest user message: {message}"
                 ),
@@ -2947,6 +3026,10 @@ class MedfarlAgent:
         extra_system = [
             {"role": "system", "content": f"Reply in {_language_name(language)}."}
         ]
+        if settings.unsafe_full_access:
+            extra_system.append(
+                {"role": "system", "content": UNSAFE_FULL_ACCESS_PROMPT}
+            )
         if planning_note:
             extra_system.append({"role": "system", "content": planning_note})
         return [
@@ -3046,9 +3129,12 @@ class MedfarlAgent:
         return candidate or reply
 
     def _requires_confirmation(self, tool_name: str) -> bool:
+        if settings.unsafe_full_access:
+            return False
         if tool_name == "run_program":
             return settings.require_confirmation_for_exec
         if tool_name in {
+            "run_shell_command",
             "run_antivirus_quick_scan",
             "update_antivirus_definitions",
             "run_antivirus_custom_scan",
@@ -3075,6 +3161,7 @@ class MedfarlAgent:
             return "high"
         if tool_name in {
             "run_program",
+            "run_shell_command",
             "run_antivirus_quick_scan",
             "update_antivirus_definitions",
             "run_antivirus_custom_scan",
@@ -3095,6 +3182,13 @@ class MedfarlAgent:
     ) -> str:
         if tool_name == "run_program":
             return _t(lang, "Запуск програми", "Запуск программы", "Program launch")
+        if tool_name == "run_shell_command":
+            return _t(
+                lang,
+                "Виконання shell-команди",
+                "Выполнение shell-команды",
+                "Shell command execution",
+            )
         if tool_name == "run_antivirus_quick_scan":
             return _t(
                 lang,
@@ -3201,6 +3295,50 @@ class MedfarlAgent:
                     f"Аргументи: {self._format_cli_args(args, lang)}.",
                     f"Аргументы: {self._format_cli_args(args, lang)}.",
                     f"Arguments: {self._format_cli_args(args, lang)}.",
+                ),
+                _t(
+                    lang,
+                    f"Робоча папка: `{cwd}`.",
+                    f"Рабочая папка: `{cwd}`.",
+                    f"Working directory: `{cwd}`.",
+                ),
+                _t(
+                    lang,
+                    f"Таймаут: {timeout} с.",
+                    f"Таймаут: {timeout} с.",
+                    f"Timeout: {timeout} s.",
+                ),
+                _t(lang, f"Ризик: {risk}.", f"Риск: {risk}.", f"Risk: {risk}."),
+            ]
+
+        if tool_name == "run_shell_command":
+            shell = arguments.get("shell") or "powershell"
+            command = arguments.get("command", "<missing>")
+            cwd = arguments.get("cwd") or _t(
+                lang,
+                "поточна робоча папка",
+                "текущая рабочая папка",
+                "the current working directory",
+            )
+            timeout = arguments.get("timeout") or "120"
+            return [
+                _t(
+                    lang,
+                    "Що: виконання локальної shell-команди.",
+                    "Что: выполнение локальной shell-команды.",
+                    "What: execute a local shell command.",
+                ),
+                _t(
+                    lang,
+                    f"Shell: `{shell}`.",
+                    f"Shell: `{shell}`.",
+                    f"Shell: `{shell}`.",
+                ),
+                _t(
+                    lang,
+                    f"Команда: `{command}`.",
+                    f"Команда: `{command}`.",
+                    f"Command: `{command}`.",
                 ),
                 _t(
                     lang,
@@ -3582,6 +3720,58 @@ class MedfarlAgent:
             formatted.append("...")
         return " ".join(formatted)
 
+    def _execute_action_now(
+        self,
+        *,
+        tool_name: str,
+        arguments: dict[str, Any],
+        note: str,
+        lang: str,
+    ) -> str:
+        action = PendingAction(
+            id=f"direct-{uuid.uuid4().hex[:8]}",
+            action_type="mutation",
+            tool_name=tool_name,
+            arguments=arguments,
+            summary=self._build_action_summary(tool_name, arguments, lang),
+            risk=self._action_risk(tool_name),
+            plan=self._build_action_plan(tool_name, arguments, lang),
+        )
+        log_action_event("executed_direct", action=action, note=note)
+        tool_result = execute_tool(tool_name, arguments, self.tool_registry)
+        decoded_result = self._decode_tool_result(tool_result)
+        log_action_event(
+            "executed_direct_result",
+            action=action,
+            result=decoded_result,
+            note="Unsafe full access direct execution.",
+        )
+        result_summary = self._execution_result_summary(decoded_result, lang)
+        return _t(
+            lang,
+            "Unsafe full access mode: виконую дію без approval-gate.\n"
+            f"- Дія: {action.summary}\n"
+            f"- Ризик: {action.risk}\n\n"
+            f"Підсумок: {result_summary}\n"
+            f"Лог: `{settings.action_audit_log_path}`\n\n"
+            "Результат:\n"
+            f"{tool_result}",
+            "Unsafe full access mode: выполняю действие без approval-gate.\n"
+            f"- Действие: {action.summary}\n"
+            f"- Риск: {action.risk}\n\n"
+            f"Итог: {result_summary}\n"
+            f"Лог: `{settings.action_audit_log_path}`\n\n"
+            "Результат:\n"
+            f"{tool_result}",
+            "Unsafe full access mode: executing the action without approval gating.\n"
+            f"- Action: {action.summary}\n"
+            f"- Risk: {action.risk}\n\n"
+            f"Summary: {result_summary}\n"
+            f"Log: `{settings.action_audit_log_path}`\n\n"
+            "Result:\n"
+            f"{tool_result}",
+        )
+
     def _queue_pending_action(
         self,
         *,
@@ -3590,6 +3780,14 @@ class MedfarlAgent:
         note: str,
         lang: str,
     ) -> str:
+        if not self._requires_confirmation(tool_name):
+            return self._execute_action_now(
+                tool_name=tool_name,
+                arguments=arguments,
+                note=note,
+                lang=lang,
+            )
+
         if self.approval.has_pending():
             existing = self.approval.pending
             if existing is not None:

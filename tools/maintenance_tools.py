@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from config import settings
 from core.file_ops import (
     append_text_file,
     create_directory,
@@ -23,10 +24,26 @@ from core.program_runner import run_program
 
 
 def build_maintenance_tools() -> list[Tool]:
+    run_program_description = "Run an approved executable from allowed execution roots."
+    create_directory_description = "Create a directory in allowed edit roots."
+    create_text_file_description = "Create a new text file in allowed edit roots."
+    write_text_file_description = (
+        "Write full text content to a file in allowed edit roots."
+    )
+    append_text_file_description = "Append text to a file in allowed edit roots."
+    if settings.unsafe_full_access:
+        run_program_description = "Run a local executable with full local access."
+        create_directory_description = "Create a directory anywhere on disk."
+        create_text_file_description = "Create a new text file anywhere on disk."
+        write_text_file_description = (
+            "Write full text content to a file anywhere on disk."
+        )
+        append_text_file_description = "Append text to a file anywhere on disk."
+
     return [
         Tool(
             name="run_program",
-            description="Run an approved executable from allowed execution roots.",
+            description=run_program_description,
             parameters={
                 "type": "object",
                 "properties": {
@@ -182,7 +199,7 @@ def build_maintenance_tools() -> list[Tool]:
         ),
         Tool(
             name="create_directory",
-            description="Create a directory in allowed edit roots.",
+            description=create_directory_description,
             parameters={
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
@@ -192,7 +209,7 @@ def build_maintenance_tools() -> list[Tool]:
         ),
         Tool(
             name="create_text_file",
-            description="Create a new text file in allowed edit roots.",
+            description=create_text_file_description,
             parameters={
                 "type": "object",
                 "properties": {
@@ -205,7 +222,7 @@ def build_maintenance_tools() -> list[Tool]:
         ),
         Tool(
             name="write_text_file",
-            description="Write full text content to a file in allowed edit roots.",
+            description=write_text_file_description,
             parameters={
                 "type": "object",
                 "properties": {
@@ -219,7 +236,7 @@ def build_maintenance_tools() -> list[Tool]:
         ),
         Tool(
             name="append_text_file",
-            description="Append text to a file in allowed edit roots.",
+            description=append_text_file_description,
             parameters={
                 "type": "object",
                 "properties": {

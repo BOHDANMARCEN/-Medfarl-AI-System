@@ -178,6 +178,7 @@ python main.py --list-models
 python main.py --model qwen3.5:9b
 python main.py --timeout 240 --model qwen3.5:9b
 python main.py --skip-healthcheck
+python main.py --unsafe-full-access --skip-healthcheck
 python main.py --benchmark-models llama3.2:3b qwen3.5:4b qwen3.5:9b
 python scripts/smoke_intents.py
 python scripts/smoke_maintenance.py
@@ -200,8 +201,26 @@ startup preflight when you explicitly want to try a model anyway. The normal sta
 path runs the same preflight automatically and exits early with a helpful error if
 Ollama is not ready.
 
-You will see the banner and a `medfarl>` prompt. Type any diagnostic question or
-`exit` / `quit` / `q` to quit.
+You will see the banner and a `medfarl>` prompt. Slash commands are available too:
+
+```text
+/help
+/reset
+/status
+/tools
+/quit
+```
+
+Type any diagnostic question or `exit` / `quit` / `q` to quit.
+
+If you want a Gemini-CLI-like local agent session with unrestricted Windows access, start:
+
+```bash
+python main.py --unsafe-full-access --skip-healthcheck
+```
+
+That mode opens the full filesystem roots for the existing file tools, enables direct
+program execution, and adds a raw Windows shell tool for `cmd` / `PowerShell`.
 
 When Medfarl plans a mutating action, it pauses and asks for explicit confirmation.
 Use:
@@ -262,7 +281,8 @@ last action
 
 - **diagnose mode**: read-only diagnostics and summaries (`діагностика`, `процеси`, `мережа`, `логи`).
 - **repair mode**: guarded mutating plans that require confirmation.
-- **dangerous actions**: high-risk operations (for example uninstall package or deleting junk) remain approval-gated and are visible in audit log.
+- **unsafe full access mode**: opt-in local agent mode enabled by `--unsafe-full-access`; approval gates are disabled and the agent can use full filesystem + shell tools.
+- **dangerous actions**: in guarded mode, high-risk operations (for example uninstall package or deleting junk) remain approval-gated and are visible in audit log.
 
 Deterministic maintenance intents currently supported:
 
@@ -602,8 +622,8 @@ before passing it to `subprocess.run`.
 
 ## Safety model
 
-Medfarl is intentionally a controlled diagnostics + maintenance assistant, not an
-unrestricted automation platform.
+By default, Medfarl is intentionally a controlled diagnostics + maintenance assistant,
+not an unrestricted automation platform.
 
 - No arbitrary shell execution. The `run_safe_command` tool only accepts keys from a
   hardcoded dictionary of safe read-only commands, not raw strings.
@@ -623,6 +643,14 @@ unrestricted automation platform.
   out the context window.
 - Mutating lifecycle events (`pending_created`, `approved`, `cancelled`, `executed`) are
   written to `medfarl_actions.log` as JSONL by default.
+
+There is now one explicit exception: `--unsafe-full-access`.
+
+- It is opt-in and off by default.
+- It expands read/edit/exec roots to the full local filesystem.
+- It disables approval gates for mutating actions.
+- It adds raw Windows shell access through the registered `run_shell_command` tool.
+- It is intended for trusted local sessions where you want Gemini-CLI-style agent behavior.
 
 Future repair capabilities (restarting services, modifying configs, installing packages)
 are planned but will require an explicit confirmation step before execution.

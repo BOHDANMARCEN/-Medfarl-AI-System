@@ -22,6 +22,7 @@ SAFE_COMMANDS: dict[str, list[str]] = {
 }
 
 IDLE_PROCESS_NAMES = {"system idle process", "idle"}
+MAX_COMMAND_OUTPUT = 12000
 
 
 def _is_usable_network_address(address: str) -> bool:
@@ -61,6 +62,12 @@ def build_tools(
 ) -> list[Tool]:
     scanner = scanner or SystemScanner()
     inspector = inspector or LibInspector()
+
+    read_file_description = "Read a text file from disk."
+    list_directory_description = "List files and folders in a directory."
+    if not settings.unsafe_full_access:
+        read_file_description = "Read a text file from an allowed root on disk."
+        list_directory_description = "List files and folders in an allowed directory."
 
     base_tools = [
         Tool(
@@ -155,7 +162,7 @@ def build_tools(
         ),
         Tool(
             name="read_file",
-            description="Read a text file from an allowed root on disk.",
+            description=read_file_description,
             parameters={
                 "type": "object",
                 "properties": {
@@ -174,7 +181,7 @@ def build_tools(
         ),
         Tool(
             name="list_directory",
-            description="List files and folders in an allowed directory.",
+            description=list_directory_description,
             parameters={
                 "type": "object",
                 "properties": {
@@ -217,6 +224,41 @@ def build_tools(
             fn=_ping_host,
         ),
     ]
+
+    if settings.unsafe_full_access:
+        base_tools.append(
+            Tool(
+                name="run_shell_command",
+                description=(
+                    "Run a Windows shell command with full local access. "
+                    "Use shell='powershell' or shell='cmd'."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "Command or script to execute",
+                        },
+                        "shell": {
+                            "type": "string",
+                            "enum": ["powershell", "cmd"],
+                            "description": "Which Windows shell to use",
+                        },
+                        "cwd": {
+                            "type": "string",
+                            "description": "Optional working directory",
+                        },
+                        "timeout": {
+                            "type": "integer",
+                            "description": "Timeout in seconds (default 120)",
+                        },
+                    },
+                    "required": ["command"],
+                },
+                fn=_run_shell_command,
+            )
+        )
 
     return [*base_tools, *build_antivirus_tools(), *build_maintenance_tools()]
 
@@ -438,6 +480,85 @@ def _list_directory(path: str) -> dict[str, Any]:
         return {"path": str(resolved), "entries": entries}
     except Exception as exc:
         return {"error": str(exc)}
+
+
+def _resolve_command_cwd(cwd: str | None) -> str:
+    if not cwd:
+        return str(Path.cwd())
+    candidate = Path(cwd).expanduser()
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    resolved = candidate.resolve()
+    if not resolved.is_dir():
+        raise FileNotFoundError(f"Working directory not found: {resolved}")
+    return str(resolved)
+
+
+def _run_shell_command(
+    command: str,
+    shell: str = "powershell",
+    cwd: str | None = None,
+    timeout: int = 120,
+) -> dict[str, Any]:
+    if not settings.unsafe_full_access:
+        return {
+            "error": "run_shell_command is available only in unsafe full access mode."
+        }
+
+    selected_shell = str(shell or "powershell").strip().casefold()
+    working_dir = _resolve_command_cwd(cwd)
+    timeout = max(1, min(int(timeout), 3600))
+
+    if selected_shell == "cmd":
+        executable = shutil.which("cmd") or shutil.which("cmd.exe")
+        if not executable:
+            return {"error": "cmd.exe is not available on this system."}
+        argv = [executable, "/d", "/s", "/c", command]
+    else:
+        executable = (
+            shutil.which("powershell")
+            or shutil.which("powershell.exe")
+            or shutil.which("pwsh")
+        )
+        if not executable:
+            return {"error": "PowerShell is not available on this system."}
+        argv = [executable, "-NoProfile", "-Command", command]
+        selected_shell = "powershell"
+
+    try:
+        result = subprocess.run(
+            argv,
+            cwd=working_dir,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "shell": selected_shell,
+            "command": command,
+            "cwd": working_dir,
+            "error": "Command timed out",
+        }
+    except Exception as exc:
+        return {
+            "shell": selected_shell,
+            "command": command,
+            "cwd": working_dir,
+            "error": str(exc),
+        }
+
+    return {
+        "shell": selected_shell,
+        "command": command,
+        "cwd": working_dir,
+        "returncode": result.returncode,
+        "stdout": result.stdout[-MAX_COMMAND_OUTPUT:],
+        "stderr": result.stderr[-MAX_COMMAND_OUTPUT:],
+    }
 
 
 def _run_safe_command(command: str, timeout: int = 15) -> dict[str, Any]:

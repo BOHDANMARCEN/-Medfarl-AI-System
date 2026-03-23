@@ -52,7 +52,7 @@ def configure_console() -> None:
 
 
 class CLI:
-    def banner(self) -> None:
+    def banner(self, *, unsafe_mode: bool = False) -> None:
         print(C.CYAN + BANNER + C.RESET)
         print(
             C.DIM
@@ -64,11 +64,19 @@ class CLI:
             + "  Ask naturally: hello, why is my PC slow, check the network, show heavy processes."
             + C.RESET
         )
+        print(C.DIM + "  Slash commands: /help, /reset, /status, /quit" + C.RESET)
+        if unsafe_mode:
+            print(
+                C.YELLOW
+                + "  [unsafe] Full filesystem, program execution, CMD, and PowerShell access enabled."
+                + C.RESET
+            )
         print()
 
-    def prompt(self) -> str:
+    def prompt(self, *, unsafe_mode: bool = False) -> str:
+        label = "\n  medfarl[unsafe]> " if unsafe_mode else "\n  medfarl> "
         try:
-            return input(C.CYAN + "\n  medfarl> " + C.RESET).strip()
+            return input(C.CYAN + label + C.RESET).strip()
         except (KeyboardInterrupt, EOFError):
             return "exit"
 
@@ -79,9 +87,9 @@ class CLI:
         print(C.RED + f"\n[error] {message}\n" + C.RESET)
 
 
-def print_banner() -> None:
-    CLI().banner()
+def print_banner(*, unsafe_mode: bool = False) -> None:
+    CLI().banner(unsafe_mode=unsafe_mode)
 
 
-def prompt_user() -> str:
-    return CLI().prompt()
+def prompt_user(*, unsafe_mode: bool = False) -> str:
+    return CLI().prompt(unsafe_mode=unsafe_mode)

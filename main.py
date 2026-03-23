@@ -133,12 +133,56 @@ def parse_args() -> argparse.Namespace:
         type=int,
         help="override the HTTP timeout in seconds for this run",
     )
+    parser.add_argument(
+        "--unsafe-full-access",
+        action="store_true",
+        help="enable unrestricted local filesystem, shell, and program access for this session",
+    )
     return parser.parse_args()
+
+
+def _cli_help_text(unsafe_mode: bool) -> str:
+    lines = [
+        "CLI commands:",
+        "- /help   show interactive help",
+        "- /reset  clear session history and bootstrap context",
+        "- /status show current model and mode",
+        "- /tools  list registered tools for this session",
+        "- /quit   exit the session",
+        "- /q      short exit alias",
+        "- exit    exit the session",
+    ]
+    if unsafe_mode:
+        lines.append(
+            "- unsafe mode is ON: full filesystem, CMD, PowerShell, and program execution are available"
+        )
+    else:
+        lines.append(
+            "- unsafe mode is OFF: guarded tool access and approval gates remain enabled"
+        )
+    return "\n".join(lines)
+
+
+def _cli_status_text(selected_model: str, selected_timeout: int) -> str:
+    mode = "unsafe-full-access" if settings.unsafe_full_access else "guarded"
+    return "\n".join(
+        [
+            "Session status:",
+            f"- model: {selected_model}",
+            f"- timeout: {selected_timeout}",
+            f"- mode: {mode}",
+            f"- read roots: {', '.join(settings.allowed_read_roots[:5])}",
+            f"- exec roots: {', '.join(settings.allowed_exec_roots[:5])}",
+        ]
+    )
 
 
 def main() -> None:
     configure_console()
     args = parse_args()
+
+    if args.unsafe_full_access:
+        settings.enable_unsafe_full_access()
 
     selected_model = args.model or settings.model
     selected_timeout = args.timeout or settings.timeout
@@ -160,15 +204,34 @@ def main() -> None:
             )
             raise SystemExit(preflight_code)
 
-    print_banner()
+    print_banner(unsafe_mode=settings.unsafe_full_access)
     agent = MedfarlAgent(model=selected_model, timeout=selected_timeout)
 
     while True:
-        user_input = prompt_user()
+        user_input = prompt_user(unsafe_mode=settings.unsafe_full_access)
         if not user_input:
             continue
 
-        if user_input.strip().lower() in {"exit", "quit", "q"}:
+        lowered = user_input.strip().lower()
+        if lowered in {"/help", "help cli"}:
+            print(f"\n{_cli_help_text(settings.unsafe_full_access)}\n")
+            continue
+
+        if lowered in {"/reset", "reset chat"}:
+            agent.reset()
+            print("\nSession reset.\n")
+            continue
+
+        if lowered in {"/status", "status cli"}:
+            print(f"\n{_cli_status_text(selected_model, selected_timeout)}\n")
+            continue
+
+        if lowered in {"/tools", "tools cli"}:
+            tool_names = "\n".join(f"- {tool.name}" for tool in agent.tool_registry)
+            print(f"\nRegistered tools:\n{tool_names}\n")
+            continue
+
+        if lowered in {"/quit", "/q", "/exit", "exit", "quit", "q"}:
             print("Goodbye.")
             break
 
