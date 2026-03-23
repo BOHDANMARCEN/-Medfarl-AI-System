@@ -56,7 +56,12 @@ class CLI:
         print(C.CYAN + BANNER + C.RESET)
         print(
             C.DIM
-            + "  Local LLM-powered system diagnostics. All data stays on your machine."
+            + "  Chat-first local diagnostics with guarded tool access. All data stays on your machine."
+            + C.RESET
+        )
+        print(
+            C.DIM
+            + "  Ask naturally: hello, why is my PC slow, check the network, show heavy processes."
             + C.RESET
         )
         print()

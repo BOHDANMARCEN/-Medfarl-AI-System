@@ -18,8 +18,9 @@ def _assert(condition: bool, message: str) -> None:
 
 
 def _extract_result_payload(reply: str) -> dict:
-    marker = "Результат:\n"
-    _assert(marker in reply, f"Expected result marker in reply: {reply[:200]}")
+    markers = ("Результат:\n", "Result:\n")
+    marker = next((candidate for candidate in markers if candidate in reply), None)
+    _assert(marker is not None, f"Expected result marker in reply: {reply[:200]}")
     payload = reply.split(marker, 1)[1].strip()
     try:
         return json.loads(payload)
@@ -32,7 +33,12 @@ def main() -> None:
 
     # request -> pending
     reply = agent.handle_user_message("встанови пакет rich")
-    _assert("Action ID" in reply, "Expected pending action message for install request")
+    _assert(
+        ("Action ID" in reply)
+        or ("ID дії" in reply)
+        or ("ID действия" in reply),
+        "Expected pending action message for install request",
+    )
     _assert(
         agent.approval.has_pending(),
         "Pending action should be present after install intent",
@@ -42,7 +48,9 @@ def main() -> None:
     # second mutating request while pending exists -> rejected, same id stays active
     rejected = agent.handle_user_message("створи файл another_note.txt")
     _assert(
-        "одна pending-дія" in rejected,
+        ("дія на підтвердженні" in rejected)
+        or ("действие на подтверждении" in rejected)
+        or ("Only one pending action" in rejected),
         "Expected single-pending reminder when second mutating request arrives",
     )
     _assert(
@@ -53,7 +61,8 @@ def main() -> None:
     # read-only flows should stay available while pending exists
     quarantine_while_pending = agent.handle_user_message("покажи що в карантині")
     _assert(
-        "quarantine" in quarantine_while_pending.casefold(),
+        ("карантин" in quarantine_while_pending.casefold())
+        or ("quarantine" in quarantine_while_pending.casefold()),
         "Expected show quarantine to stay available during pending action",
     )
     diagnostics_while_pending = agent.handle_user_message("діагностика ПК")
@@ -64,18 +73,24 @@ def main() -> None:
 
     # wrong id -> safe refusal
     wrong = agent.handle_user_message("approve wrongid")
-    _assert("не збігається" in wrong, "Expected ID mismatch safeguard message")
+    _assert(
+        ("не збігається" in wrong) or ("does not match" in wrong),
+        "Expected ID mismatch safeguard message",
+    )
 
     # cancel -> clear pending
     cancelled = agent.handle_user_message(f"cancel {pending_id}")
-    _assert("Скасовано" in cancelled, "Expected cancellation confirmation")
+    _assert(
+        ("Скасовано" in cancelled) or ("Cancelled" in cancelled),
+        "Expected cancellation confirmation",
+    )
     _assert(
         not agent.approval.has_pending(),
         "Pending action should be cleared after cancel",
     )
     stale_approve = agent.handle_user_message(f"approve {pending_id}")
     _assert(
-        "Немає дії" in stale_approve,
+        ("Немає дії" in stale_approve) or ("There is no action" in stale_approve),
         "Expected safe refusal for stale approve after cancellation",
     )
 
@@ -90,21 +105,30 @@ def main() -> None:
     )
     create_id = agent.approval.pending.id
     approved_create = agent.handle_user_message(f"approve {create_id}")
-    _assert("Підсумок:" in approved_create, "Expected execution summary after approve")
+    _assert(
+        ("Підсумок:" in approved_create)
+        or ("Итог:" in approved_create)
+        or ("Summary:" in approved_create),
+        "Expected execution summary after approve",
+    )
     _assert(test_file.exists(), "Create file action should create target file")
     test_file.unlink(missing_ok=True)
 
     # blocked exec path -> guided fallback
     blocked = agent.handle_user_message(r"запусти C:\Windows\System32\cmd.exe")
     _assert(
-        ("не можу" in blocked.casefold()) or ("дозволен" in blocked.casefold()),
+        ("не можу" in blocked.casefold())
+        or ("дозволен" in blocked.casefold())
+        or ("cannot directly run" in blocked.casefold()),
         "Expected safe guided fallback for blocked executable path",
     )
 
     # junk preview
     junk_preview = agent.handle_user_message("знайди сміття")
     _assert(
-        "preview" in junk_preview.casefold(),
+        ("попередній огляд" in junk_preview.casefold())
+        or ("предпросмотр" in junk_preview.casefold())
+        or ("preview" in junk_preview.casefold()),
         "Expected deterministic junk preview report",
     )
 
@@ -132,7 +156,7 @@ def main() -> None:
 
     missing_restore = agent.handle_user_message("віднови з карантину qk-deadbeef")
     _assert(
-        "Не знайшов" in missing_restore,
+        ("Не знайшов" in missing_restore) or ("could not find" in missing_restore.casefold()),
         "Expected clear message for missing quarantine entry id",
     )
 
@@ -159,7 +183,7 @@ def main() -> None:
         f"віднови з карантину {quarantine_entry_id}"
     )
     _assert(
-        "Не знайшов" in restore_again,
+        ("Не знайшов" in restore_again) or ("could not find" in restore_again.casefold()),
         "Expected restored entry to be absent from quarantine on repeated restore",
     )
 
@@ -193,14 +217,22 @@ def main() -> None:
 
     # history / last action commands
     history = agent.handle_user_message("history actions 5")
-    _assert("Останні дії" in history, "Expected action history response")
+    _assert(
+        ("Останні дії" in history) or ("Recent actions" in history),
+        "Expected action history response",
+    )
     last = agent.handle_user_message("last action")
-    _assert("Остання зафіксована дія" in last, "Expected last action response")
+    _assert(
+        ("Остання зафіксована дія" in last) or ("Last recorded action" in last),
+        "Expected last action response",
+    )
 
     # antivirus deterministic phrase should produce a stable response
     antivirus = agent.handle_user_message("перевір антивірусом")
     _assert(
         ("Action ID" in antivirus)
+        or ("ID дії" in antivirus)
+        or ("ID действия" in antivirus)
         or ("антивірус" in antivirus.casefold())
         or ("defender" in antivirus.casefold()),
         "Expected antivirus status/scan response",
@@ -210,7 +242,7 @@ def main() -> None:
             f"cancel {agent.approval.pending.id}"
         )
         _assert(
-            "Скасовано" in cancel_antivirus,
+            ("Скасовано" in cancel_antivirus) or ("Cancelled" in cancel_antivirus),
             "Expected antivirus quick-scan cancellation",
         )
 

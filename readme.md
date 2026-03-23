@@ -4,10 +4,13 @@
 
 > Deep local diagnostics. Zero cloud. All analysis stays on your machine.
 
-Medfarl is a terminal-based diagnostic assistant that runs a local LLM as an agent with
-controlled tool access to your system. It inspects hardware, processes, packages,
-logs, and services — then explains what it finds in plain language. It can also run
-maintenance actions through guarded tools with explicit approval.
+Medfarl is a chat-first terminal diagnostic assistant that runs a local LLM as an
+agent with controlled tool access to your system. You can speak to it naturally, and
+it decides whether to answer directly, ask one concise clarifying question, use tools,
+or switch into guided/manual assistance when an action is blocked. It inspects
+hardware, processes, packages, logs, and services — then explains what it finds in
+plain language. It can also run maintenance actions through guarded tools with
+explicit approval.
 
 ---
 
@@ -54,13 +57,51 @@ tool results or guess before reading actual system state.
 
 ## What Works Now
 
-Current alpha is strongest in three areas:
+Current alpha is strongest in four areas:
 
-- `diagnose mode` - deterministic local summaries for overall system state, processes, disks, network, and logs.
-- `repair mode` - approval-gated maintenance plans for packages, file edits, program launch, antivirus tasks, and junk handling.
-- `auditability` - action ids, JSONL audit trail, single pending-action policy, and smoke scripts for regression checks.
+- `chat-first routing` - every turn is handled as a conversational request first, not as a strict command.
+- `tool-aware diagnostics` - the agent decides when to answer directly and when to use the existing tool loop.
+- `guided/manual mode` - blocked actions become practical manual guidance instead of cold refusal.
+- `auditability` - action ids, JSONL audit trail, single pending-action policy, smoke scripts, and targeted unit tests.
 
-This makes the current build useful as a local PC Doctor alpha rather than just a chat wrapper around tools.
+This keeps Medfarl useful as a local PC Doctor alpha while making the UX feel like a normal assistant instead of a command parser.
+
+---
+
+## Chat-first behavior
+
+Each user turn now passes through an explicit conversational router inside the agent:
+
+```text
+DIRECT_RESPONSE
+CLARIFICATION
+TOOL_USE
+GUIDED_MANUAL_MODE
+```
+
+What that means in practice:
+
+- Natural language is the default UX. Inputs like `привіт`, `подивись, чому комп гальмує`, `що жере RAM`, or `ось папка з ClamAV, як це запустити` are valid first-class prompts.
+- Fast-path intent normalization still exists for short, common diagnostics such as `діагностика ПК`, `процеси`, `мережа`, `диск`, and `логи`, but it is only an optimization.
+- Ambiguous fragments like `воно не працює` or a bare path no longer dead-end the session; Medfarl either asks one short follow-up question or switches into guided/manual help.
+- Language is preserved turn by turn for Ukrainian, Russian, and English replies.
+
+Realistic examples:
+
+```text
+medfarl> привіт
+Привіт! Що саме перевірити: загальний стан системи, процеси, диски, мережу чи логи?
+
+medfarl> подивись, чому комп гальмує
+Добре, перевірю CPU, RAM, диски та найважчі процеси.
+... tool-aware diagnostic reply ...
+
+medfarl> C:\clamav-1.5.1.win.x64
+I can see a Windows path ... The safest next step is to open that folder manually and check for clamscan.exe or freshclam.exe.
+
+medfarl> там антивірус його треба запустити
+Бачу, ти хочеш запустити програму з цього шляху. Я не можу напряму запускати .exe поза дозволеними шляхами, але можу підказати, який файл шукати вручну: clamscan.exe або freshclam.exe.
+```
 
 ---
 
@@ -71,11 +112,22 @@ processes, GPU if available, package manager state) and injects it into the conv
 as a synthetic bootstrap tool result. The LLM receives this context before the first user
 message — so it can answer basic questions immediately without making extra tool calls.
 
-When you ask a question, the agent enters a tool-calling loop:
+When you ask a question, the agent now does two stages:
+
+```text
+user message
+    → conversational planner
+        → direct response
+        → clarification
+        → guided/manual mode
+        → tool use
+```
+
+If the planner selects `TOOL_USE`, Medfarl enters the existing tool-calling loop:
 
 ```
 user message
-    → LLM decides: answer directly OR call a tool
+    → LLM decides which tool to call
         → tool executes locally, result appended to context
             → LLM continues reasoning
                 → repeat until final text answer
@@ -163,18 +215,22 @@ pending
 
 ## First user flow
 
-The default UX is optimized for a short, guided first interaction.
+The default UX is now optimized for short natural-language turns instead of command-shaped prompts.
 
 - `привіт` returns a clear next-step menu (overall health, processes, disks, network, logs).
-- `help`, `допомога`, or `що ти ще можеш` now returns a short interactive help menu first (`1. діагностика ПК`, `2. обслуговування / дії`, `3. інше запитання`), with the older deterministic capability summary kept as timeout/error fallback.
+- `help`, `допомога`, or `що ти ще можеш` returns a short interactive help menu first (`1. діагностика ПК`, `2. обслуговування / дії`, `3. інше запитання`).
 - After that interactive help menu, replying with `1`, `2`, or `3` routes into the matching next step.
-- Very short intents are normalized into deterministic actions before LLM reasoning:
+- Very short diagnostic intents are still normalized into deterministic fast paths:
   - `діагностикою ПК` → `Зроби загальну діагностику ПК`
   - `процеси` → `Покажи найважчі процеси`
   - `мережа` → `Перевір стан мережі`
   - `диск` / `диски` → `Перевір диски і вільне місце`
   - `логи` → `Покажи помилки в системних логах`
-- Ambiguous short inputs trigger a clarification prompt instead of a low-quality guess.
+- Ambiguous short inputs trigger one concise clarification prompt instead of a low-quality guess.
+- Path-like inputs are treated as conversational context:
+  - allowed path → clarify what the user wants to do next
+  - blocked path → guided/manual assistance with the next safe manual step
+- Requests to launch external software from blocked folders now prefer guided/manual help over blunt refusal.
 
 For `діагностика ПК`, `процеси`, `диски`, `мережа`, and `логи`, the agent runs
 deterministic local flows and returns short PC Doctor-style reports without chatty detours.
@@ -312,11 +368,13 @@ Recommended alpha regression commands:
 
 ```bash
 python main.py --healthcheck
+python -m unittest tests.test_chat_routing -v
 python scripts/smoke_intents.py
 python scripts/smoke_maintenance.py
 ```
 
-- `scripts/smoke_intents.py` checks guided diagnose and repair intents.
+- `tests/test_chat_routing.py` checks language preservation, clarification, path handling, guided/manual mode, fast-path intent normalization, and a fake-client tool loop.
+- `scripts/smoke_intents.py` checks chat-first routing and conversational flows.
 - `scripts/smoke_maintenance.py` checks pending approvals, wrong-id refusals, junk lifecycle, audit/history, and antivirus routing.
 
 ---
