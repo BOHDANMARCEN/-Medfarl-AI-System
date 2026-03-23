@@ -156,6 +156,13 @@ def _cli_help_text(unsafe_mode: bool) -> str:
         lines.append(
             "- unsafe mode is ON: full filesystem, CMD, PowerShell, and program execution are available"
         )
+        lines.extend(
+            [
+                "- /shell [powershell|cmd]  enter multi-line shell mode",
+                "- /end                    run the buffered shell block",
+                "- /cancel                 discard the buffered shell block",
+            ]
+        )
     else:
         lines.append(
             "- unsafe mode is OFF: guarded tool access and approval gates remain enabled"
@@ -175,6 +182,10 @@ def _cli_status_text(selected_model: str, selected_timeout: int) -> str:
             f"- exec roots: {', '.join(settings.allowed_exec_roots[:5])}",
         ]
     )
+
+
+def _shell_prompt_label(shell_name: str) -> str:
+    return f"\n  {shell_name}*> "
 
 
 def main() -> None:
@@ -206,10 +217,55 @@ def main() -> None:
 
     print_banner(unsafe_mode=settings.unsafe_full_access)
     agent = MedfarlAgent(model=selected_model, timeout=selected_timeout)
+    shell_mode: str | None = None
+    shell_lines: list[str] = []
 
     while True:
-        user_input = prompt_user(unsafe_mode=settings.unsafe_full_access)
-        if not user_input:
+        if shell_mode is not None:
+            user_input = prompt_user(
+                unsafe_mode=settings.unsafe_full_access,
+                prompt_label=_shell_prompt_label(shell_mode),
+                strip_input=False,
+            )
+        else:
+            user_input = prompt_user(unsafe_mode=settings.unsafe_full_access)
+        if not user_input and shell_mode is None:
+            continue
+
+        if shell_mode is not None:
+            lowered_shell = user_input.strip().lower()
+            if lowered_shell in {"/end", "/run"}:
+                if not shell_lines:
+                    print("\nShell buffer is empty.\n")
+                    continue
+                command_block = "\n".join(shell_lines)
+                shell_lines = []
+                current_shell = shell_mode
+                shell_mode = None
+                try:
+                    response = agent.handle_user_message(
+                        f"{current_shell} {command_block}"
+                    )
+                    print(f"\n{response}\n")
+                except KeyboardInterrupt:
+                    print("\nInterrupted by user.\n")
+                except Exception as exc:
+                    print(f"\n[error] {exc}\n")
+                continue
+            if lowered_shell in {"/cancel", "/cancel-shell"}:
+                shell_lines = []
+                shell_mode = None
+                print("\nShell buffer discarded.\n")
+                continue
+            if lowered_shell in {"/show", "/buffer"}:
+                preview = "\n".join(shell_lines) if shell_lines else "<empty>"
+                print(f"\nBuffered {shell_mode} script:\n{preview}\n")
+                continue
+            if lowered_shell in {"/quit", "/q", "/exit"}:
+                print("Goodbye.")
+                break
+
+            shell_lines.append(user_input)
             continue
 
         lowered = user_input.strip().lower()
@@ -229,6 +285,28 @@ def main() -> None:
         if lowered in {"/tools", "tools cli"}:
             tool_names = "\n".join(f"- {tool.name}" for tool in agent.tool_registry)
             print(f"\nRegistered tools:\n{tool_names}\n")
+            continue
+
+        if lowered in {"/ps", "/powershell", "/shell", "/shell powershell"}:
+            if not settings.unsafe_full_access:
+                print("\nShell mode is available only with --unsafe-full-access.\n")
+                continue
+            shell_mode = "powershell"
+            shell_lines = []
+            print(
+                "\nEntered multi-line PowerShell mode. Use /end to run, /cancel to discard, /show to preview.\n"
+            )
+            continue
+
+        if lowered in {"/cmd", "/shell cmd"}:
+            if not settings.unsafe_full_access:
+                print("\nShell mode is available only with --unsafe-full-access.\n")
+                continue
+            shell_mode = "cmd"
+            shell_lines = []
+            print(
+                "\nEntered multi-line CMD mode. Use /end to run, /cancel to discard, /show to preview.\n"
+            )
             continue
 
         if lowered in {"/quit", "/q", "/exit", "exit", "quit", "q"}:

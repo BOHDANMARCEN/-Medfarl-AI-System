@@ -64,19 +64,35 @@ class CLI:
             + "  Ask naturally: hello, why is my PC slow, check the network, show heavy processes."
             + C.RESET
         )
-        print(C.DIM + "  Slash commands: /help, /reset, /status, /quit" + C.RESET)
+        print(
+            C.DIM + "  Slash commands: /help, /reset, /status, /tools, /quit" + C.RESET
+        )
         if unsafe_mode:
             print(
                 C.YELLOW
                 + "  [unsafe] Full filesystem, program execution, CMD, and PowerShell access enabled."
                 + C.RESET
             )
+            print(
+                C.DIM
+                + "  Multi-line shell: /shell powershell or /shell cmd, then /end to run."
+                + C.RESET
+            )
         print()
 
-    def prompt(self, *, unsafe_mode: bool = False) -> str:
-        label = "\n  medfarl[unsafe]> " if unsafe_mode else "\n  medfarl> "
+    def prompt(
+        self,
+        *,
+        unsafe_mode: bool = False,
+        prompt_label: str | None = None,
+        strip_input: bool = True,
+    ) -> str:
+        label = prompt_label or (
+            "\n  medfarl[unsafe]> " if unsafe_mode else "\n  medfarl> "
+        )
         try:
-            return input(C.CYAN + label + C.RESET).strip()
+            value = input(C.CYAN + label + C.RESET)
+            return value.strip() if strip_input else value
         except (KeyboardInterrupt, EOFError):
             return "exit"
 
@@ -91,5 +107,14 @@ def print_banner(*, unsafe_mode: bool = False) -> None:
     CLI().banner(unsafe_mode=unsafe_mode)
 
 
-def prompt_user(*, unsafe_mode: bool = False) -> str:
-    return CLI().prompt(unsafe_mode=unsafe_mode)
+def prompt_user(
+    *,
+    unsafe_mode: bool = False,
+    prompt_label: str | None = None,
+    strip_input: bool = True,
+) -> str:
+    return CLI().prompt(
+        unsafe_mode=unsafe_mode,
+        prompt_label=prompt_label,
+        strip_input=strip_input,
+    )

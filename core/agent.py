@@ -250,6 +250,9 @@ OPERATIONAL_REQUEST_WORDS = {
 }
 
 MUTATING_TOOLS = {
+    "copy_path",
+    "move_path",
+    "remove_path",
     "run_program",
     "run_shell_command",
     "run_antivirus_quick_scan",
@@ -1110,6 +1113,134 @@ def _extract_shell_command_request(message: str) -> Optional[dict[str, Any]]:
         }
 
     return None
+
+
+def _extract_create_directory_request(message: str) -> Optional[dict[str, Any]]:
+    compact = message.strip()
+    match = re.match(
+        r"(?is)^(?:mkdir|md|create\s+(?:dir|directory|folder)|створи\s+папку)\s+(.+)$",
+        compact,
+    )
+    if not match:
+        return None
+
+    tail = match.group(1).strip()
+    path = _extract_path_token(tail)
+    if not path:
+        return None
+    return {"path": path}
+
+
+def _extract_copy_path_request(message: str) -> Optional[dict[str, Any]]:
+    if not settings.unsafe_full_access:
+        return None
+
+    compact = message.strip()
+    match = re.match(r"(?is)^(?:copy|cp)\s+(.+)$", compact)
+    if not match:
+        return None
+
+    source, destination = _extract_two_path_arguments(match.group(1).strip())
+    if not source or not destination:
+        return None
+
+    overwrite = bool(
+        re.search(r"(?i)(?:\s|^)(?:overwrite|replace|force|-f|/y)(?:\s|$)", compact)
+    )
+    return {
+        "source": source,
+        "destination": destination,
+        "overwrite": overwrite,
+    }
+
+
+def _extract_move_path_request(message: str) -> Optional[dict[str, Any]]:
+    if not settings.unsafe_full_access:
+        return None
+
+    compact = message.strip()
+    normalized = " ".join(compact.split())
+    if any(pattern.search(normalized) for pattern in MOVE_JUNK_PATTERNS):
+        return None
+    match = re.match(r"(?is)^(?:move|mv)\s+(.+)$", compact)
+    if not match:
+        return None
+
+    source, destination = _extract_two_path_arguments(match.group(1).strip())
+    if not source or not destination:
+        return None
+
+    overwrite = bool(
+        re.search(r"(?i)(?:\s|^)(?:overwrite|replace|force|-f|/y)(?:\s|$)", compact)
+    )
+    return {
+        "source": source,
+        "destination": destination,
+        "overwrite": overwrite,
+    }
+
+
+def _extract_remove_path_request(message: str) -> Optional[dict[str, Any]]:
+    if not settings.unsafe_full_access:
+        return None
+
+    compact = message.strip()
+    normalized = " ".join(compact.split())
+    if any(pattern.search(normalized) for pattern in DELETE_JUNK_PATTERNS):
+        return None
+    match = re.match(r"(?is)^(?:rm|del|delete|remove|erase|rmdir)\s+(.+)$", compact)
+    if not match:
+        return None
+
+    tail = match.group(1).strip()
+    recursive = bool(
+        re.search(r"(?i)(?:\s|^)(?:-r|-rf|/s|--recursive|recursive)(?:\s|$)", tail)
+    )
+    tail = re.sub(
+        r"(?i)(?:\s|^)(?:-r|-rf|/s|--recursive|recursive)(?:\s|$)",
+        " ",
+        tail,
+    ).strip()
+    path = _extract_path_token(tail)
+    if not path:
+        return None
+    return {
+        "path": path,
+        "recursive": recursive or compact.casefold().startswith("rmdir"),
+    }
+
+
+def _extract_path_token(text: str) -> Optional[str]:
+    quoted = _extract_quoted_text(text)
+    if quoted:
+        return quoted
+
+    paths = _extract_all_paths(text)
+    if paths:
+        return paths[0]
+
+    cleaned = text.strip().strip("`'\"")
+    return cleaned or None
+
+
+def _extract_two_path_arguments(text: str) -> tuple[Optional[str], Optional[str]]:
+    paths = _extract_all_paths(text)
+    if len(paths) >= 2:
+        return paths[0], paths[1]
+
+    quoted = _extract_all_quoted_texts(text)
+    if len(quoted) >= 2:
+        return quoted[0], quoted[1]
+
+    split = re.split(r"(?i)\s+(?:to|into|->)\s+", text, maxsplit=1)
+    if len(split) == 2:
+        return _extract_path_token(split[0]), _extract_path_token(split[1])
+
+    tokens = text.split()
+    if len(tokens) >= 2:
+        return tokens[0].strip("`'\""), " ".join(tokens[1:]).strip("`'\"")
+
+    return None, None
 
 
 def _is_find_junk_request(message: str) -> bool:
@@ -2463,9 +2594,13 @@ class MedfarlAgent:
 
         install_req = _extract_install_request(cleaned_message)
         uninstall_req = _extract_uninstall_request(cleaned_message)
+        create_dir_req = _extract_create_directory_request(cleaned_message)
         create_file_req = _extract_create_file_request(cleaned_message)
         append_file_req = _extract_append_file_request(cleaned_message)
         replace_file_req = _extract_replace_file_request(cleaned_message)
+        copy_path_req = _extract_copy_path_request(cleaned_message)
+        move_path_req = _extract_move_path_request(cleaned_message)
+        remove_path_req = _extract_remove_path_request(cleaned_message)
         run_prog_req = _extract_run_program_request(cleaned_message)
         move_junk_req = _extract_move_junk_request(cleaned_message)
         delete_junk_req = _extract_delete_junk_request(cleaned_message)
@@ -2488,6 +2623,16 @@ class MedfarlAgent:
                 "payload": {
                     "tool_name": "pip_uninstall_package",
                     "arguments": uninstall_req,
+                },
+            }
+        if create_dir_req:
+            return {
+                **base,
+                "route": ROUTE_TOOL_USE,
+                "kind": "maintenance_or_files",
+                "payload": {
+                    "tool_name": "create_directory",
+                    "arguments": create_dir_req,
                 },
             }
         if create_file_req:
@@ -2518,6 +2663,36 @@ class MedfarlAgent:
                 "payload": {
                     "tool_name": "edit_text_file",
                     "arguments": replace_file_req,
+                },
+            }
+        if copy_path_req:
+            return {
+                **base,
+                "route": ROUTE_TOOL_USE,
+                "kind": "maintenance_or_files",
+                "payload": {
+                    "tool_name": "copy_path",
+                    "arguments": copy_path_req,
+                },
+            }
+        if move_path_req:
+            return {
+                **base,
+                "route": ROUTE_TOOL_USE,
+                "kind": "maintenance_or_files",
+                "payload": {
+                    "tool_name": "move_path",
+                    "arguments": move_path_req,
+                },
+            }
+        if remove_path_req:
+            return {
+                **base,
+                "route": ROUTE_TOOL_USE,
+                "kind": "maintenance_or_files",
+                "payload": {
+                    "tool_name": "remove_path",
+                    "arguments": remove_path_req,
                 },
             }
 
@@ -3157,9 +3332,11 @@ class MedfarlAgent:
         return False
 
     def _action_risk(self, tool_name: str) -> str:
-        if tool_name in {"pip_uninstall_package", "delete_junk_files"}:
+        if tool_name in {"pip_uninstall_package", "delete_junk_files", "remove_path"}:
             return "high"
         if tool_name in {
+            "copy_path",
+            "move_path",
             "run_program",
             "run_shell_command",
             "run_antivirus_quick_scan",
@@ -3180,6 +3357,12 @@ class MedfarlAgent:
     def _build_action_summary(
         self, tool_name: str, arguments: dict[str, Any], lang: str
     ) -> str:
+        if tool_name == "copy_path":
+            return _t(lang, "Копіювання шляху", "Копирование пути", "Copy path")
+        if tool_name == "move_path":
+            return _t(lang, "Переміщення шляху", "Перемещение пути", "Move path")
+        if tool_name == "remove_path":
+            return _t(lang, "Видалення шляху", "Удаление пути", "Remove path")
         if tool_name == "run_program":
             return _t(lang, "Запуск програми", "Запуск программы", "Program launch")
         if tool_name == "run_shell_command":
@@ -3272,6 +3455,90 @@ class MedfarlAgent:
         self, tool_name: str, arguments: dict[str, Any], lang: str
     ) -> list[str]:
         risk = self._action_risk(tool_name)
+        if tool_name == "copy_path":
+            source = arguments.get("source", "<missing>")
+            destination = arguments.get("destination", "<missing>")
+            overwrite = bool(arguments.get("overwrite", False))
+            return [
+                _t(
+                    lang,
+                    "Що: копіювання файла або папки.",
+                    "Что: копирование файла или папки.",
+                    "What: copy a file or directory.",
+                ),
+                _t(
+                    lang,
+                    f"Звідки: `{source}`.",
+                    f"Откуда: `{source}`.",
+                    f"Source: `{source}`.",
+                ),
+                _t(
+                    lang,
+                    f"Куди: `{destination}`.",
+                    f"Куда: `{destination}`.",
+                    f"Destination: `{destination}`.",
+                ),
+                _t(
+                    lang,
+                    f"Overwrite: {'так' if overwrite else 'ні'}.",
+                    f"Overwrite: {'да' if overwrite else 'нет'}.",
+                    f"Overwrite: {'yes' if overwrite else 'no'}.",
+                ),
+                _t(lang, f"Ризик: {risk}.", f"Риск: {risk}.", f"Risk: {risk}."),
+            ]
+
+        if tool_name == "move_path":
+            source = arguments.get("source", "<missing>")
+            destination = arguments.get("destination", "<missing>")
+            overwrite = bool(arguments.get("overwrite", False))
+            return [
+                _t(
+                    lang,
+                    "Що: переміщення або перейменування файла чи папки.",
+                    "Что: перемещение или переименование файла или папки.",
+                    "What: move or rename a file or directory.",
+                ),
+                _t(
+                    lang,
+                    f"Звідки: `{source}`.",
+                    f"Откуда: `{source}`.",
+                    f"Source: `{source}`.",
+                ),
+                _t(
+                    lang,
+                    f"Куди: `{destination}`.",
+                    f"Куда: `{destination}`.",
+                    f"Destination: `{destination}`.",
+                ),
+                _t(
+                    lang,
+                    f"Overwrite: {'так' if overwrite else 'ні'}.",
+                    f"Overwrite: {'да' if overwrite else 'нет'}.",
+                    f"Overwrite: {'yes' if overwrite else 'no'}.",
+                ),
+                _t(lang, f"Ризик: {risk}.", f"Риск: {risk}.", f"Risk: {risk}."),
+            ]
+
+        if tool_name == "remove_path":
+            path = arguments.get("path", "<missing>")
+            recursive = bool(arguments.get("recursive", False))
+            return [
+                _t(
+                    lang,
+                    "Що: видалення локального файла або папки.",
+                    "Что: удаление локального файла или папки.",
+                    "What: remove a local file or directory.",
+                ),
+                _t(lang, f"Шлях: `{path}`.", f"Путь: `{path}`.", f"Path: `{path}`."),
+                _t(
+                    lang,
+                    f"Рекурсивно: {'так' if recursive else 'ні'}.",
+                    f"Рекурсивно: {'да' if recursive else 'нет'}.",
+                    f"Recursive: {'yes' if recursive else 'no'}.",
+                ),
+                _t(lang, f"Ризик: {risk}.", f"Риск: {risk}.", f"Risk: {risk}."),
+            ]
+
         if tool_name == "run_program":
             path = arguments.get("path", "<missing>")
             args = arguments.get("args") or []

@@ -147,6 +147,83 @@ def edit_text_file(path: str, find_text: str, replace_text: str) -> dict[str, An
     }
 
 
+def copy_path(source: str, destination: str, overwrite: bool = False) -> dict[str, Any]:
+    if not settings.unsafe_full_access:
+        return {"error": "copy_path is available only in unsafe full access mode."}
+
+    src = _resolve_loose_path(source)
+    dst = _resolve_loose_path(destination)
+    if not src.exists():
+        return {"error": f"Source path does not exist: {src}"}
+    if dst.exists():
+        if not overwrite:
+            return {"error": f"Destination already exists: {dst}"}
+        _remove_existing_path(dst)
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if src.is_dir():
+        shutil.copytree(src, dst)
+        path_type = "dir"
+    else:
+        shutil.copy2(src, dst)
+        path_type = "file"
+
+    return {
+        "source": str(src),
+        "destination": str(dst),
+        "copied": True,
+        "type": path_type,
+        "overwrite": overwrite,
+    }
+
+
+def move_path(source: str, destination: str, overwrite: bool = False) -> dict[str, Any]:
+    if not settings.unsafe_full_access:
+        return {"error": "move_path is available only in unsafe full access mode."}
+
+    src = _resolve_loose_path(source)
+    dst = _resolve_loose_path(destination)
+    if not src.exists():
+        return {"error": f"Source path does not exist: {src}"}
+    if dst.exists():
+        if not overwrite:
+            return {"error": f"Destination already exists: {dst}"}
+        _remove_existing_path(dst)
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dst))
+    return {
+        "source": str(src),
+        "destination": str(dst),
+        "moved": True,
+        "overwrite": overwrite,
+    }
+
+
+def remove_path(path: str, recursive: bool = False) -> dict[str, Any]:
+    if not settings.unsafe_full_access:
+        return {"error": "remove_path is available only in unsafe full access mode."}
+
+    target = _resolve_loose_path(path)
+    if not target.exists():
+        return {"error": f"Path does not exist: {target}"}
+
+    if target.is_dir() and not recursive:
+        return {
+            "error": f"Directory removal requires recursive=True: {target}",
+            "path": str(target),
+        }
+
+    path_type = "dir" if target.is_dir() else "file"
+    _remove_existing_path(target)
+    return {
+        "path": str(target),
+        "deleted": True,
+        "type": path_type,
+        "recursive": recursive,
+    }
+
+
 def find_junk_files(
     scope: str = "safe", older_than_days: int = 7, limit: int = 300
 ) -> dict[str, Any]:

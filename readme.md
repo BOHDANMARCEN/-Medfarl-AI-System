@@ -208,6 +208,8 @@ You will see the banner and a `medfarl>` prompt. Slash commands are available to
 /reset
 /status
 /tools
+/shell powershell
+/shell cmd
 /quit
 ```
 
@@ -220,7 +222,8 @@ python main.py --unsafe-full-access --skip-healthcheck
 ```
 
 That mode opens the full filesystem roots for the existing file tools, enables direct
-program execution, and adds a raw Windows shell tool for `cmd` / `PowerShell`.
+program execution, adds raw Windows shell access for `cmd` / `PowerShell`, and enables
+CLI-style filesystem actions like `copy`, `move`, `rm`, and `mkdir` against any local path.
 
 When Medfarl plans a mutating action, it pauses and asks for explicit confirmation.
 Use:
@@ -283,6 +286,17 @@ last action
 - **repair mode**: guarded mutating plans that require confirmation.
 - **unsafe full access mode**: opt-in local agent mode enabled by `--unsafe-full-access`; approval gates are disabled and the agent can use full filesystem + shell tools.
 - **dangerous actions**: in guarded mode, high-risk operations (for example uninstall package or deleting junk) remain approval-gated and are visible in audit log.
+
+Examples in unsafe mode:
+
+```text
+copy "C:\temp\a.txt" "D:\backup\a.txt"
+move "C:\temp\a.txt" "C:\temp\archive\a.txt"
+rm "C:\temp\old.log"
+rm "C:\temp\old_dir" --recursive
+mkdir "C:\temp\new_folder"
+powershell Get-Process | Sort-Object CPU -Descending | Select-Object -First 10
+```
 
 Deterministic maintenance intents currently supported:
 

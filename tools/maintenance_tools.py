@@ -3,12 +3,15 @@ from __future__ import annotations
 from config import settings
 from core.file_ops import (
     append_text_file,
+    copy_path,
     create_directory,
     create_text_file,
     delete_junk_files,
     edit_text_file,
     find_junk_files,
     move_junk_to_quarantine,
+    move_path,
+    remove_path,
     restore_from_quarantine,
     show_quarantine,
     write_text_file,
@@ -40,7 +43,7 @@ def build_maintenance_tools() -> list[Tool]:
         )
         append_text_file_description = "Append text to a file anywhere on disk."
 
-    return [
+    tools = [
         Tool(
             name="run_program",
             description=run_program_description,
@@ -262,3 +265,52 @@ def build_maintenance_tools() -> list[Tool]:
             fn=edit_text_file,
         ),
     ]
+
+    if settings.unsafe_full_access:
+        tools.extend(
+            [
+                Tool(
+                    name="copy_path",
+                    description="Copy any local file or directory to another path.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "source": {"type": "string"},
+                            "destination": {"type": "string"},
+                            "overwrite": {"type": "boolean"},
+                        },
+                        "required": ["source", "destination"],
+                    },
+                    fn=copy_path,
+                ),
+                Tool(
+                    name="move_path",
+                    description="Move or rename any local file or directory.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "source": {"type": "string"},
+                            "destination": {"type": "string"},
+                            "overwrite": {"type": "boolean"},
+                        },
+                        "required": ["source", "destination"],
+                    },
+                    fn=move_path,
+                ),
+                Tool(
+                    name="remove_path",
+                    description="Delete any local file or directory. Use recursive for directories.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "recursive": {"type": "boolean"},
+                        },
+                        "required": ["path"],
+                    },
+                    fn=remove_path,
+                ),
+            ]
+        )
+
+    return tools

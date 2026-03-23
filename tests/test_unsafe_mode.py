@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import subprocess
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 from config import settings
 from core.agent import MedfarlAgent, ROUTE_TOOL_USE
@@ -92,6 +96,9 @@ class UnsafeModeTests(unittest.TestCase):
         tool_names = {tool.name for tool in build_tools()}
 
         self.assertIn("run_shell_command", tool_names)
+        self.assertIn("copy_path", tool_names)
+        self.assertIn("move_path", tool_names)
+        self.assertIn("remove_path", tool_names)
 
     def test_explicit_powershell_request_routes_to_tool_use(self) -> None:
         settings.enable_unsafe_full_access()
@@ -113,6 +120,51 @@ class UnsafeModeTests(unittest.TestCase):
         self.assertEqual(plan["route"], ROUTE_TOOL_USE)
         self.assertEqual(plan["kind"], "maintenance_or_files")
         self.assertEqual(plan["payload"]["tool_name"], "run_program")
+
+    def test_copy_move_remove_and_mkdir_route_to_tools_in_unsafe_mode(self) -> None:
+        settings.enable_unsafe_full_access()
+        agent = self._make_agent()
+
+        copy_plan = agent.classify_request(
+            r'copy "C:\src.txt" "C:\dst.txt"'.replace('"', '"')
+        )
+        move_plan = agent.classify_request(
+            r'move "C:\src.txt" "C:\dst.txt"'.replace('"', '"')
+        )
+        remove_plan = agent.classify_request(r'rm "C:\temp\old.txt"'.replace('"', '"'))
+        mkdir_plan = agent.classify_request(r'mkdir "C:\temp\newdir"'.replace('"', '"'))
+
+        self.assertEqual(copy_plan["payload"]["tool_name"], "copy_path")
+        self.assertEqual(move_plan["payload"]["tool_name"], "move_path")
+        self.assertEqual(remove_plan["payload"]["tool_name"], "remove_path")
+        self.assertEqual(mkdir_plan["payload"]["tool_name"], "create_directory")
+
+    def test_multiline_shell_mode_executes_buffer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "unsafe_multiline_test.txt"
+            command = (
+                "$path = '"
+                + str(target).replace("\\", "\\\\")
+                + "'\n"
+                + "Set-Content -Path $path -Value 'unsafe multiline ok'"
+            )
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "main.py",
+                    "--unsafe-full-access",
+                    "--skip-healthcheck",
+                ],
+                input=f"/shell powershell\n{command}\n/end\n/q\n",
+                text=True,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+            self.assertEqual(proc.returncode, 0)
+            self.assertTrue(target.exists())
+            self.assertIn("Unsafe full access mode", proc.stdout)
 
 
 if __name__ == "__main__":
