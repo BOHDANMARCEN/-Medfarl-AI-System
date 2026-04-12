@@ -138,6 +138,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="enable unrestricted local filesystem, shell, and program access for this session",
     )
+    parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="enable streaming output (interactive token-by-token display like Gemini CLI)",
+    )
     return parser.parse_args()
 
 
@@ -197,6 +202,7 @@ def main() -> None:
 
     selected_model = args.model or settings.model
     selected_timeout = args.timeout or settings.timeout
+    enable_streaming = args.stream
 
     if args.list_models:
         raise SystemExit(list_models(selected_model, selected_timeout))
@@ -314,8 +320,11 @@ def main() -> None:
             break
 
         try:
-            response = agent.handle_user_message(user_input)
-            print(f"\n{response}\n")
+            response = agent.handle_user_message(user_input, stream=enable_streaming)
+            if not enable_streaming:
+                print(f"\n{response}\n")
+            else:
+                print()
         except KeyboardInterrupt:
             print("\nInterrupted by user.\n")
         except Exception as exc:

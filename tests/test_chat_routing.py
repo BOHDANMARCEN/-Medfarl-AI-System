@@ -96,7 +96,7 @@ class FakeClient:
         self._tool_turns = 0
         self.calls: list[dict[str, object]] = []
 
-    def chat(self, messages, tools=None):
+    def chat(self, messages, tools=None, stream=False):
         last_user = next(
             (
                 entry.get("content", "")
@@ -149,7 +149,7 @@ class UnavailableClient:
         self.model = "fake-model"
         self.base_url = "http://localhost:11434"
 
-    def chat(self, messages, tools=None):
+    def chat(self, messages, tools=None, stream=False):
         raise RuntimeError("[WinError 10061] Connection refused")
 
 
@@ -158,7 +158,7 @@ class UnavailableTimeoutClient:
         self.model = "fake-model"
         self.base_url = "http://localhost:11434"
 
-    def chat(self, messages, tools=None):
+    def chat(self, messages, tools=None, stream=False):
         raise TimeoutError("timed out")
 
     def server_check(self, timeout=3):

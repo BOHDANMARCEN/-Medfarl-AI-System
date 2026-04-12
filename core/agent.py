@@ -2849,7 +2849,7 @@ class MedfarlAgent:
         self._record_response(cleaned_message, reply)
         return reply
 
-    def _handle_tool_use(self, classification: dict[str, Any]) -> str:
+    def _handle_tool_use(self, classification: dict[str, Any], stream: bool = False) -> str:
         kind = classification.get("kind")
         cleaned_message = classification.get("cleaned_message") or ""
         normalized_message = classification.get("normalized_message") or cleaned_message
@@ -2951,7 +2951,7 @@ class MedfarlAgent:
 
         self._history.append({"role": "user", "content": normalized_message})
         try:
-            reply = self._run_agent_loop(language=language, planning_note=planning_note)
+            reply = self._run_agent_loop(language=language, planning_note=planning_note, stream=stream)
         except Exception as exc:
             reply = self._friendly_runtime_error(exc, language)
         else:
@@ -3090,7 +3090,7 @@ class MedfarlAgent:
         lowered = str(exc).casefold()
         return "timed out" in lowered or "timeout" in lowered
 
-    def handle_user_message(self, message: str) -> str:
+    def handle_user_message(self, message: str, stream: bool = False) -> str:
         classification = self.classify_request(message)
         route = classification.get("route")
 
@@ -3099,7 +3099,7 @@ class MedfarlAgent:
         if route == ROUTE_CLARIFICATION:
             return self._handle_clarification(classification)
         if route == ROUTE_TOOL_USE:
-            return self._handle_tool_use(classification)
+            return self._handle_tool_use(classification, stream=stream)
         if route == ROUTE_GUIDED_MANUAL_MODE:
             return self._handle_guided_manual_mode(classification)
         return ""
@@ -3133,22 +3133,26 @@ class MedfarlAgent:
         ]
 
     def _run_agent_loop(
-        self, *, language: str, planning_note: Optional[str] = None
+        self, *, language: str, planning_note: Optional[str] = None, stream: bool = False
     ) -> str:
         messages = self._full_messages(language=language, planning_note=planning_note)
 
         for _ in range(settings.max_tool_steps):
-            response = self.client.chat(messages=messages, tools=self.schemas)
+            response = self.client.chat(messages=messages, tools=self.schemas, stream=stream)
             assistant_message = response.get("assistant_message", {})
             tool_call = response.get("tool_call")
 
             if not tool_call:
-                return assistant_message.get("content") or _t(
+                content = assistant_message.get("content") or _t(
                     language,
                     "Відповідь не згенерована.",
                     "Ответ не сгенерирован.",
                     "No response was generated.",
                 )
+                # Add newline after streaming completes
+                if stream:
+                    print()
+                return content
 
             tool_call_id = response.get("tool_call_id") or "call_0"
             messages.append(
@@ -3178,6 +3182,10 @@ class MedfarlAgent:
                     note="Awaiting explicit user confirmation.",
                     lang=language,
                 )
+
+            # Show tool execution indicator in streaming mode
+            if stream:
+                print(f"\n\n🔧 Using tool: {tool_name}...", flush=True)
 
             tool_result = execute_tool(tool_name, tool_arguments, self.tool_registry)
             messages.append(

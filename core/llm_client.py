@@ -25,14 +25,19 @@ class LLMClient:
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
+        stream: bool = False,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "model": self.model,
             "messages": messages,
-            "stream": False,
+            "stream": stream,
         }
         if tools:
             payload["tools"] = tools
+
+        # Streaming mode for interactive output
+        if stream:
+            return self._stream_response(payload)
 
         response = httpx.post(
             f"{self.base_url}/v1/chat/completions",
@@ -75,6 +80,77 @@ class LLMClient:
             },
             "tool_call": None,
             "tool_call_id": None,
+        }
+
+    def _stream_response(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Stream response tokens in real-time like Gemini CLI."""
+        full_content = ""
+        tool_calls = []
+        tool_call_id = None
+
+        with httpx.stream(
+            "POST",
+            f"{self.base_url}/v1/chat/completions",
+            json=payload,
+            timeout=self.timeout,
+        ) as response:
+            response.raise_for_status()
+
+            for line in response.iter_lines():
+                line = line.strip()
+                if not line or not line.startswith("data: "):
+                    continue
+
+                data_str = line[6:]  # Remove "data: " prefix
+                if data_str == "[DONE]":
+                    break
+
+                try:
+                    chunk = json.loads(data_str)
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+
+                    # Collect tool calls if present
+                    if delta.get("tool_calls"):
+                        for tc in delta["tool_calls"]:
+                            tool_calls.append(tc)
+                            if tc.get("id"):
+                                tool_call_id = tc["id"]
+
+                    # Collect content tokens
+                    content = delta.get("content", "")
+                    if content:
+                        full_content += content
+                        # Print token immediately for interactive feel
+                        print(content, end="", flush=True)
+
+                except (json.JSONDecodeError, IndexError, KeyError):
+                    continue
+
+        # Parse tool calls if any
+        parsed_tool_call = None
+        if tool_calls:
+            raw = tool_calls[0]
+            function = raw.get("function", {})
+            arguments = function.get("arguments") or "{}"
+
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    arguments = {}
+
+            parsed_tool_call = {
+                "name": function.get("name", ""),
+                "arguments": arguments,
+            }
+
+        return {
+            "assistant_message": {
+                "role": "assistant",
+                "content": full_content,
+            },
+            "tool_call": parsed_tool_call,
+            "tool_call_id": tool_call_id,
         }
 
     def healthcheck(self) -> Dict[str, Any]:

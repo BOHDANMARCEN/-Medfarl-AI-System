@@ -1,23 +1,47 @@
 @echo off
-setlocal
+chcp 65001 >nul
+title Medfarl AI System
 
-cd /d "%~dp0"
+echo ========================================
+echo   Medfarl AI System - Запуск
+echo ========================================
+echo.
 
-set "PYTHONUTF8=1"
-set "PYTHONIOENCODING=utf-8"
-
-if exist ".venv\Scripts\python.exe" (
-    set "PYTHON=.venv\Scripts\python.exe"
-) else (
-    set "PYTHON=python"
+REM Перевірка чи встановлений Python
+python --version >nul 2>&1
+if errorlevel 1 (
+    echo [ПОМИЛКА] Python не знайдено!
+    echo Встановіть Python з https://python.org
+    pause
+    exit /b 1
 )
 
-%PYTHON% main.py %*
-set "EXIT_CODE=%ERRORLEVEL%"
+REM Перевірка чи встановлені залежності
+echo [1/3] Перевірка залежностей...
+pip show httpx >nul 2>&1
+if errorlevel 1 (
+    echo [ІНФО] Встановлення залежностей...
+    pip install -r requirements.txt
+    if errorlevel 1 (
+        echo [ПОМИЛКА] Не вдалося встановити залежності!
+        pause
+        exit /b 1
+    )
+)
 
-if not "%EXIT_CODE%"=="0" (
+echo [2/3] Перевірка Ollama...
+curl -s http://localhost:11434/api/tags >nul 2>&1
+if errorlevel 1 (
+    echo [ПОПЕРЕДЖЕННЯ] Ollama не запущено або не встановлено!
     echo.
-    echo Medfarl exited with code %EXIT_CODE%.
+    echo Для встановлення Ollama: https://ollama.ai
+    echo Або запустіть з параметром --skip-healthcheck
+    echo.
+    pause
 )
 
-exit /b %EXIT_CODE%
+echo [3/3] Запуск Medfarl AI System...
+echo.
+python main.py
+
+pause

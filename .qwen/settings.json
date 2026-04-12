@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(run.bat)",
+      "Bash(git add *)"
+    ]
+  },
+  "$version": 3
+}
