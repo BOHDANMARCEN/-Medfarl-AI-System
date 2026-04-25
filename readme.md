@@ -668,7 +668,7 @@ Maintenance mode keeps system-changing actions explicit and reviewable.
 | **diagnose mode** | Read-only diagnostics and summaries |
 | **repair mode** | Guarded mutating plans requiring confirmation |
 | **unsafe full access mode** | Opt-in via `--unsafe-full-access`; no approval gates |
-| **dangerous actions** | High-risk operations remain approval-gated even in unsafe mode |
+| **dangerous actions** | In guarded mode, high-risk operations remain approval-gated and auditable |
 
 ### Supported Maintenance Intents
 

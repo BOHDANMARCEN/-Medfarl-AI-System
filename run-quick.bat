@@ -1,13 +1,7 @@
 @echo off
-chcp 65001 >nul
+setlocal
+
 title Medfarl AI System - Швидкий запуск
+call "%~dp0run.bat" --skip-healthcheck %*
 
-echo ========================================
-echo   Medfarl AI System - Швидкий запуск
-echo ========================================
-echo.
-
-REM Пропускає перевірку Ollama для швидкого старту
-python main.py --skip-healthcheck
-
-pause
+exit /b %ERRORLEVEL%

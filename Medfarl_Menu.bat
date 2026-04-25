@@ -2,6 +2,8 @@
 chcp 65001 >nul
 title Medfarl AI System - Меню
 
+cd /d "%~dp0"
+
 :menu
 cls
 echo ========================================
@@ -56,50 +58,43 @@ goto menu
 :model_qwen_4b
 echo.
 echo Запуск з моделлю qwen3.5:4b...
-python main.py --model qwen3.5:4b
-pause
+call "%~dp0run.bat" --model qwen3.5:4b
 goto menu
 
 :model_qwen_9b
 echo.
 echo Запуск з моделлю qwen3.5:9b...
-python main.py --model qwen3.5:9b
-pause
+call "%~dp0run.bat" --model qwen3.5:9b
 goto menu
 
 :model_llama_3b
 echo.
 echo Запуск з моделлю llama3.2:3b...
-python main.py --model llama3.2:3b
-pause
+call "%~dp0run.bat" --model llama3.2:3b
 goto menu
 
 :model_gemma
 echo.
 echo Запуск з моделлю gemma-abliterated...
-python main.py --model gemma-abliterated
-pause
+call "%~dp0run.bat" --model gemma-abliterated
 goto menu
 
 :model_gpt_20b
 echo.
 echo Запуск з моделлю gpt-oss-20b...
-python main.py --model gpt-oss-20b --timeout 240
-pause
+call "%~dp0run.bat" --model gpt-oss-20b --timeout 240
 goto menu
 
 :model_qwen25_14b
 echo.
 echo Запуск з моделлю qwen2.5-1m:14b...
-python main.py --model huihui_ai/qwen2.5-1m-abliterated:14b --timeout 240
-pause
+call "%~dp0run.bat" --model huihui_ai/qwen2.5-1m-abliterated:14b --timeout 240
 goto menu
 
 :model_qwen3_14b
 echo.
 echo Запуск з моделлю qwen3:14b (без цензури)...
-python main.py --model huihui_ai/qwen3-abliterated:14b --timeout 240
-pause
+call "%~dp0run.bat" --model huihui_ai/qwen3-abliterated:14b --timeout 240
 goto menu
 
 :cloud_models
@@ -112,50 +107,43 @@ goto menu
 :normal
 echo.
 echo Запуск з перевіркою Ollama...
-python main.py
-pause
+call "%~dp0run.bat"
 goto menu
 
 :quick
 echo.
 echo Швидкий запуск...
-python main.py --skip-healthcheck
-pause
+call "%~dp0run-quick.bat"
 goto menu
 
 :unsafe
 echo.
 echo Запуск у режимі повного доступу...
-python main.py --unsafe-full-access --skip-healthcheck
-pause
+call "%~dp0run-unsafe.bat"
 goto menu
 
 :healthcheck
 echo.
 echo Перевірка системи...
-python main.py --healthcheck
-pause
+call "%~dp0run.bat" --healthcheck
 goto menu
 
 :listmodels
 echo.
 echo Список доступних моделей...
-python main.py --list-models
-pause
+call "%~dp0run.bat" --list-models
 goto menu
 
 :benchmark
 echo.
 echo Бенчмарк моделей (qwen3.5:4b, qwen3.5:9b, llama3.2:3b)...
-python main.py --benchmark-models qwen3.5:4b qwen3.5:9b llama3.2:3b
-pause
+call "%~dp0run.bat" --benchmark-models qwen3.5:4b qwen3.5:9b llama3.2:3b
 goto menu
 
 :streaming
 echo.
 echo Запуск в інтерактивному режимі (Streaming)...
-python main.py --stream --model qwen3.5:4b
-pause
+call "%~dp0run-streaming.bat"
 goto menu
 
 :end

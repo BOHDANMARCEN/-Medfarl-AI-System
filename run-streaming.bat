@@ -1,7 +1,7 @@
 @echo off
-chcp 65001 >nul
-title Medfarl AI System - Interactive Streaming
+setlocal
 
+title Medfarl AI System - Interactive Streaming
 echo ========================================
 echo   Medfarl AI System - Streaming Mode
 echo ========================================
@@ -10,6 +10,6 @@ echo Інтерактивний режим - відповіді з'являют�
 echo Як Gemini CLI або ChatGPT
 echo.
 
-python main.py --stream --model qwen3.5:4b
+call "%~dp0run.bat" --stream --model qwen3.5:4b %*
 
-pause
+exit /b %ERRORLEVEL%

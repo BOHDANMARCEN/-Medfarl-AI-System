@@ -166,6 +166,7 @@ def _cli_help_text(unsafe_mode: bool) -> str:
                 "- /shell [powershell|cmd]  enter multi-line shell mode",
                 "- /end                    run the buffered shell block",
                 "- /cancel                 discard the buffered shell block",
+                "- /show                   preview the buffered shell block",
             ]
         )
     else:
