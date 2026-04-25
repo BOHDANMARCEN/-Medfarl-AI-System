@@ -3091,6 +3091,7 @@ class MedfarlAgent:
         return "timed out" in lowered or "timeout" in lowered
 
     def handle_user_message(self, message: str, stream: bool = False) -> str:
+        self._last_response_streamed = False
         classification = self.classify_request(message)
         route = classification.get("route")
 
@@ -3107,9 +3108,13 @@ class MedfarlAgent:
     def reset(self) -> None:
         self._bootstrap()
 
+    def last_response_streamed(self) -> bool:
+        return bool(getattr(self, "_last_response_streamed", False))
+
     def _bootstrap(self) -> None:
         snapshot = _build_snapshot_context(self.scanner, self.inspector)
         self._awaiting_help_menu = False
+        self._last_response_streamed = False
         self._history = [
             {
                 "role": "assistant",
@@ -3151,6 +3156,7 @@ class MedfarlAgent:
                 )
                 # Add newline after streaming completes
                 if stream:
+                    self._last_response_streamed = True
                     print()
                 return content
 

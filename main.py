@@ -327,7 +327,7 @@ def main() -> None:
 
         try:
             response = agent.handle_user_message(user_input, stream=enable_streaming)
-            if not enable_streaming:
+            if not enable_streaming or not agent.last_response_streamed():
                 print(f"\n{response}\n")
             else:
                 print()
