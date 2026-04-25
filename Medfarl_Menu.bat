@@ -1,38 +1,38 @@
 @echo off
 chcp 65001 >nul
-title Medfarl AI System - Меню
+title Medfarl AI System - Menu
 
 cd /d "%~dp0"
 
 :menu
 cls
 echo ========================================
-echo     Medfarl AI System - Меню запуску
+echo     Medfarl AI System - Launch Menu
 echo ========================================
 echo.
-echo  ДОСТУПНІ МОДЕЛІ:
-echo  1. qwen3.5:4b         (3.4 GB - швидка)
-echo  2. qwen3.5:9b         (6.6 GB - якісна)
-echo  3. llama3.2:3b        (2.0 GB - легка)
-echo  4. gemma-abliterated  (7.3 GB)
-echo  5. gpt-oss-20b        (11 GB - потужна)
-echo  6. qwen2.5-1m:14b     (9.0 GB - великий контекст)
-echo  7. qwen3:14b          (9.0 GB - без цензури)
-echo  8. Cloud моделі       (gemini, kimi, deepseek, qwen-coder)
+echo  AVAILABLE MODELS:
+echo  1. qwen3.5:4b         ^(3.4 GB - fast^)
+echo  2. qwen3.5:9b         ^(6.6 GB - quality^)
+echo  3. llama3.2:3b        ^(2.0 GB - light^)
+echo  4. gemma-abliterated  ^(7.3 GB^)
+echo  5. gpt-oss-20b        ^(11 GB - powerful^)
+echo  6. qwen2.5-1m:14b     ^(9.0 GB - large context^)
+echo  7. qwen3:14b          ^(9.0 GB - uncensored^)
+echo  8. Cloud models       ^(gemini, kimi, deepseek, qwen-coder^)
 echo.
-echo  ЗАПУСК:
-echo  10. Запуск за замовчуванням (Streaming, qwen3.5:9b)
-echo  11. Швидкий запуск (Streaming, без перевірки)
-echo  12. Режим повного доступу (Unsafe)
-echo  13. Перевірка здоров'я
-echo  14. Список моделей
-echo  15. Бенчмарк (порівняння моделей)
-echo  16. ІНТЕРАКТИВНИЙ РЕЖИМ (Streaming як Gemini CLI, qwen3.5:9b)
-echo  17. Вихід
+echo  ACTIONS:
+echo  10. Default launch ^(Streaming, qwen3.5:9b^)
+echo  11. Quick launch ^(Streaming, skip healthcheck^)
+echo  12. Full access mode ^(Unsafe^)
+echo  13. Healthcheck
+echo  14. List models
+echo  15. Benchmark ^(compare models^)
+echo  16. INTERACTIVE MODE ^(Streaming like Gemini CLI, qwen3.5:9b^)
+echo  17. Exit
 echo.
 echo ========================================
 
-set /p choice="Оберіть опцію (1-17): "
+set /p choice="Choose an option (1-17): "
 
 if "%choice%"=="1" goto model_qwen_4b
 if "%choice%"=="2" goto model_qwen_9b
@@ -51,102 +51,102 @@ if "%choice%"=="15" goto benchmark
 if "%choice%"=="16" goto streaming
 if "%choice%"=="17" goto end
 
-echo Невірний вибір!
+echo Invalid choice!
 pause
 goto menu
 
 :model_qwen_4b
 echo.
-echo Запуск з моделлю qwen3.5:4b...
+echo Launching with qwen3.5:4b...
 call "%~dp0run.bat" --model qwen3.5:4b
 goto menu
 
 :model_qwen_9b
 echo.
-echo Запуск з моделлю qwen3.5:9b...
+echo Launching with qwen3.5:9b...
 call "%~dp0run.bat" --model qwen3.5:9b
 goto menu
 
 :model_llama_3b
 echo.
-echo Запуск з моделлю llama3.2:3b...
+echo Launching with llama3.2:3b...
 call "%~dp0run.bat" --model llama3.2:3b
 goto menu
 
 :model_gemma
 echo.
-echo Запуск з моделлю gemma-abliterated...
+echo Launching with gemma-abliterated...
 call "%~dp0run.bat" --model gemma-abliterated
 goto menu
 
 :model_gpt_20b
 echo.
-echo Запуск з моделлю gpt-oss-20b...
+echo Launching with gpt-oss-20b...
 call "%~dp0run.bat" --model gpt-oss-20b --timeout 240
 goto menu
 
 :model_qwen25_14b
 echo.
-echo Запуск з моделлю qwen2.5-1m:14b...
+echo Launching with qwen2.5-1m:14b...
 call "%~dp0run.bat" --model huihui_ai/qwen2.5-1m-abliterated:14b --timeout 240
 goto menu
 
 :model_qwen3_14b
 echo.
-echo Запуск з моделлю qwen3:14b (без цензури)...
+echo Launching with qwen3:14b ^(uncensored^)...
 call "%~dp0run.bat" --model huihui_ai/qwen3-abliterated:14b --timeout 240
 goto menu
 
 :cloud_models
 echo.
-echo Cloud моделі потребують налаштування MEDFARL_LLM_URL
-echo Спробуйте локальні моделі (1-7) або натисніть 11
+echo Cloud models require MEDFARL_LLM_URL setup.
+echo Try a local model ^(1-7^) or use option 11.
 pause
 goto menu
 
 :normal
 echo.
-echo Запуск за замовчуванням ^(Streaming + qwen3.5:9b^) ...
+echo Starting default mode ^(Streaming + qwen3.5:9b^) ...
 call "%~dp0run.bat"
 goto menu
 
 :quick
 echo.
-echo Швидкий запуск ^(Streaming, без перевірки^) ...
+echo Starting quick mode ^(Streaming, skip healthcheck^) ...
 call "%~dp0run-quick.bat"
 goto menu
 
 :unsafe
 echo.
-echo Запуск у режимі повного доступу...
+echo Starting full access mode...
 call "%~dp0run-unsafe.bat"
 goto menu
 
 :healthcheck
 echo.
-echo Перевірка системи...
+echo Running healthcheck...
 call "%~dp0run.bat" --healthcheck
 goto menu
 
 :listmodels
 echo.
-echo Список доступних моделей...
+echo Listing available models...
 call "%~dp0run.bat" --list-models
 goto menu
 
 :benchmark
 echo.
-echo Бенчмарк моделей (qwen3.5:4b, qwen3.5:9b, llama3.2:3b)...
+echo Benchmarking models ^(qwen3.5:4b, qwen3.5:9b, llama3.2:3b^) ...
 call "%~dp0run.bat" --benchmark-models qwen3.5:4b qwen3.5:9b llama3.2:3b
 goto menu
 
 :streaming
 echo.
-echo Запуск в інтерактивному режимі (Streaming + qwen3.5:9b)...
+echo Starting interactive streaming mode ^(qwen3.5:9b^) ...
 call "%~dp0run-streaming.bat"
 goto menu
 
 :end
 echo.
-echo До побачення!
+echo Goodbye!
 exit /b 0
