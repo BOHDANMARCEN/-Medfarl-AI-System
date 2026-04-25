@@ -141,7 +141,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--stream",
         action="store_true",
-        help="enable streaming output (interactive token-by-token display like Gemini CLI)",
+        help="enable streaming output explicitly (streaming is already the default)",
+    )
+    parser.add_argument(
+        "--no-stream",
+        action="store_true",
+        help="disable streaming output and print full replies only after completion",
     )
     return parser.parse_args()
 
@@ -203,7 +208,7 @@ def main() -> None:
 
     selected_model = args.model or settings.model
     selected_timeout = args.timeout or settings.timeout
-    enable_streaming = args.stream
+    enable_streaming = not args.no_stream
 
     if args.list_models:
         raise SystemExit(list_models(selected_model, selected_timeout))

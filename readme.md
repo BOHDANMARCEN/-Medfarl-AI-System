@@ -13,8 +13,8 @@ assistance when an action is blocked. Inspects hardware, processes, packages, lo
 services — then explains findings in plain language. Can also run maintenance actions
 through guarded tools with explicit approval.
 
-**New:** Interactive streaming mode — responses appear token-by-token in real-time,
-just like Gemini CLI or ChatGPT!
+**Default mode:** Interactive streaming output is now enabled by default,
+with `qwen3.5:9b` as the default model.
 
 ---
 
@@ -115,7 +115,7 @@ You need at least **one Ollama model with tool-calling support**:
 | `huihui_ai/qwen2.5-1m-abliterated:14b` | 9.0 GB | 14 GB | ⚡⚡ Medium | ⭐⭐⭐⭐ Great |
 | `huihui_ai/qwen3-abliterated:14b` | 9.0 GB | 14 GB | ⚡⚡ Medium | ⭐⭐⭐⭐ Great |
 
-**Default model:** `qwen3.5:4b` (balanced speed/quality)
+**Default model:** `qwen3.5:9b` (higher-quality default for chat-first interactive use)
 
 ---
 
@@ -185,10 +185,10 @@ brew install ollama
 ### Step 2: Pull a Model
 
 ```bash
-# Fast default model (recommended)
+# Fast fallback model
 ollama pull qwen3.5:4b
 
-# Higher quality model
+# Default recommended model
 ollama pull qwen3.5:9b
 
 # Lightweight model for low-RAM systems
@@ -227,8 +227,8 @@ python main.py --list-models
 Expected output:
 ```
 [ok] Ollama reachable at http://localhost:11434
-[ok] Model available: qwen3.5:4b
-[ok] Tool calling supported: qwen3.5:4b
+[ok] Model available: qwen3.5:9b
+[ok] Tool calling supported: qwen3.5:9b
 ```
 
 ---
@@ -246,6 +246,10 @@ Medfarl_Menu.bat
 ```bat
 run.bat
 ```
+
+This now starts the default interactive Gemini-CLI-like mode:
+- streaming enabled
+- model `qwen3.5:9b`
 
 **Fast Launch (skip Ollama check):**
 ```bat
@@ -265,11 +269,14 @@ run-unsafe.bat
 ### Using Command Line
 
 ```bash
-# Interactive session (default model: qwen3.5:4b)
+# Interactive streaming session (default model: qwen3.5:9b)
 python main.py
 
-# Streaming mode — responses appear in real-time
+# Streaming is already enabled by default
 python main.py --stream
+
+# Disable streaming and print full replies only at the end
+python main.py --no-stream
 
 # Specific model
 python main.py --model qwen3.5:9b
@@ -300,8 +307,8 @@ python main.py --benchmark-models qwen3.5:4b qwen3.5:9b llama3.2:3b
 
 ## Streaming Mode
 
-**NEW!** Interactive streaming output — see responses token-by-token as they're generated,
-just like Gemini CLI or ChatGPT.
+Streaming is now the default interactive behavior. Responses appear token-by-token in
+real time, just like Gemini CLI or ChatGPT.
 
 ### Before (Normal Mode):
 ```
@@ -330,9 +337,12 @@ medfarl> що жере RAM
 ### Enable Streaming
 
 ```bash
-# Command line
+# Command line (already default)
 python main.py --stream
 python main.py --stream --model qwen3.5:9b
+
+# Explicitly disable it if needed
+python main.py --no-stream
 
 # Batch file
 run-streaming.bat
@@ -440,7 +450,7 @@ overridden with an environment variable.
 | Variable | Default | Description |
 |---|---|---|
 | `MEDFARL_LLM_URL` | `http://localhost:11434` | Ollama or any OpenAI-compatible endpoint |
-| `MEDFARL_MODEL` | `qwen3.5:4b` | Model name as Ollama knows it |
+| `MEDFARL_MODEL` | `qwen3.5:9b` | Model name as Ollama knows it |
 | `MEDFARL_TIMEOUT` | `120` | HTTP timeout in seconds for LLM calls |
 | `MEDFARL_MAX_TOOL_STEPS` | `8` | Maximum tool call iterations per user turn |
 | `MEDFARL_ALLOWED_READ_ROOTS` | current workspace | `os.pathsep`-separated roots for file read access |
@@ -475,7 +485,7 @@ MEDFARL_LLM_URL=http://localhost:1337 python main.py
 # Read-only properties
 settings.llm_url         # → http://localhost:11434
 settings.llm_base_url    # → same as llm_url
-settings.model           # → qwen3.5:4b
+settings.model           # → qwen3.5:9b
 settings.llm_model       # → same as model
 settings.timeout         # → 120
 settings.llm_timeout     # → same as timeout
@@ -519,8 +529,8 @@ gemma-abliterated:latest                71e17c56807f    7.3 GB    7 months ago
 
 | Model | Size | RAM | Speed | Quality | Use Case |
 |-------|------|-----|-------|---------|----------|
-| `qwen3.5:4b` | 3.4 GB | 6 GB | ⚡⚡⚡ | ⭐⭐⭐ | **Default** — balanced |
-| `qwen3.5:9b` | 6.6 GB | 10 GB | ⚡⚡ | ⭐⭐⭐⭐ | Better reasoning |
+| `qwen3.5:4b` | 3.4 GB | 6 GB | ⚡⚡⚡ | ⭐⭐⭐ | Faster fallback |
+| `qwen3.5:9b` | 6.6 GB | 10 GB | ⚡⚡ | ⭐⭐⭐⭐ | **Default** — better reasoning |
 | `llama3.2:3b` | 2.0 GB | 4 GB | ⚡⚡⚡⚡ | ⭐⭐ | Low-RAM systems |
 | `gemma-abliterated` | 7.3 GB | 10 GB | ⚡⚡ | ⭐⭐⭐⭐ | Uncensored |
 | `gpt-oss-20b` | 11 GB | 16 GB | ⚡ | ⭐⭐⭐⭐⭐ | Maximum quality |
@@ -546,10 +556,10 @@ Windows batch files for quick launching:
 | Script | Description |
 |--------|-------------|
 | `Medfarl_Menu.bat` | **Interactive menu** with all models and modes |
-| `run.bat` | Normal launch with dependency/Ollama checks |
-| `run-quick.bat` | Fast launch without Ollama healthcheck |
+| `run.bat` | Default interactive streaming launch with `qwen3.5:9b` |
+| `run-quick.bat` | Fast default launch without Ollama healthcheck |
 | `run-unsafe.bat` | Full filesystem + shell access mode |
-| `run-streaming.bat` | **Interactive streaming mode** (like Gemini CLI) |
+| `run-streaming.bat` | Explicit streaming launcher pinned to `qwen3.5:9b` |
 
 ### Menu Options
 
@@ -569,13 +579,13 @@ Windows batch files for quick launching:
 8. Cloud моделі       (gemini, kimi, deepseek, qwen-coder)
 
 ЗАПУСК:
-10. Звичайний запуск (qwen3.5:4b)
-11. Швидкий запуск (без перевірки)
+10. Запуск за замовчуванням (Streaming, qwen3.5:9b)
+11. Швидкий запуск (Streaming, без перевірки)
 12. Режим повного доступу (Unsafe)
 13. Перевірка здоров'я
 14. Список моделей
 15. Бенчмарк (порівняння моделей)
-16. ІНТЕРАКТИВНИЙ РЕЖИМ (Streaming як Gemini CLI)
+16. ІНТЕРАКТИВНИЙ РЕЖИМ (Streaming як Gemini CLI, qwen3.5:9b)
 17. Вихід
 ```
 
@@ -586,7 +596,7 @@ Windows batch files for quick launching:
 ```
 usage: main.py [-h] [--model MODEL] [--list-models] [--healthcheck]
                [--benchmark-models MODEL [MODEL ...]] [--skip-healthcheck]
-               [--timeout TIMEOUT] [--unsafe-full-access] [--stream]
+               [--timeout TIMEOUT] [--unsafe-full-access] [--stream] [--no-stream]
 
 Medfarl AI System
 
@@ -600,8 +610,9 @@ options:
   --timeout TIMEOUT           Override HTTP timeout in seconds for LLM calls
   --unsafe-full-access        Enable unrestricted filesystem, shell, and
                               program access for this session
-  --stream                    Enable streaming output (interactive token-by-token
-                              display like Gemini CLI)
+  --stream                    Enable streaming output explicitly (already default)
+  --no-stream                 Disable streaming output and print full replies only
+                              after completion
 ```
 
 ### Argument Examples
@@ -610,13 +621,13 @@ options:
 # Use different model
 python main.py --model llama3.2:3b
 
-# Streaming with high-quality model and longer timeout
+# Default-style launch with high-quality model and longer timeout
 python main.py --stream --model qwen3.5:9b --timeout 240
 
 # Benchmark three models
 python main.py --benchmark-models qwen3.5:4b qwen3.5:9b llama3.2:3b
 
-# Unsafe mode with streaming
+# Unsafe mode with default streaming
 python main.py --stream --unsafe-full-access
 ```
 

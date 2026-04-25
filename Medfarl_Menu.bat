@@ -21,13 +21,13 @@ echo  7. qwen3:14b          (9.0 GB - без цензури)
 echo  8. Cloud моделі       (gemini, kimi, deepseek, qwen-coder)
 echo.
 echo  ЗАПУСК:
-echo  10. Звичайний запуск (qwen3.5:4b)
-echo  11. Швидкий запуск (без перевірки)
+echo  10. Запуск за замовчуванням (Streaming, qwen3.5:9b)
+echo  11. Швидкий запуск (Streaming, без перевірки)
 echo  12. Режим повного доступу (Unsafe)
 echo  13. Перевірка здоров'я
 echo  14. Список моделей
 echo  15. Бенчмарк (порівняння моделей)
-echo  16. ІНТЕРАКТИВНИЙ РЕЖИМ (Streaming як Gemini CLI)
+echo  16. ІНТЕРАКТИВНИЙ РЕЖИМ (Streaming як Gemini CLI, qwen3.5:9b)
 echo  17. Вихід
 echo.
 echo ========================================
@@ -106,13 +106,13 @@ goto menu
 
 :normal
 echo.
-echo Запуск з перевіркою Ollama...
+echo Запуск за замовчуванням ^(Streaming + qwen3.5:9b^) ...
 call "%~dp0run.bat"
 goto menu
 
 :quick
 echo.
-echo Швидкий запуск...
+echo Швидкий запуск ^(Streaming, без перевірки^) ...
 call "%~dp0run-quick.bat"
 goto menu
 
@@ -142,7 +142,7 @@ goto menu
 
 :streaming
 echo.
-echo Запуск в інтерактивному режимі (Streaming)...
+echo Запуск в інтерактивному режимі (Streaming + qwen3.5:9b)...
 call "%~dp0run-streaming.bat"
 goto menu
 
