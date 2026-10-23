@@ -13,8 +13,12 @@ assistance when an action is blocked. Inspects hardware, processes, packages, lo
 services — then explains findings in plain language. Can also run maintenance actions
 through guarded tools with explicit approval.
 
-**Default mode:** Interactive streaming output is now enabled by default,
-with `qwen3.5:9b` as the default model.
+**Default mode:** Run `run.bat` for a direct, interactive streaming chat with
+`jikepjikep_16HEX/gemma-4-e4b-nightshift-heretic-uncensored-q4:latest`.
+Ollama starts automatically if needed and the model is loaded before the prompt.
+Conversation history is kept until `/reset` or exit. Use `/quit` to leave.
+The diagnostic assistant described below is available through `run.bat --agent`;
+that mode requires tool support. Override the model with `--model` or `MEDFARL_MODEL`.
 
 ---
 
@@ -115,7 +119,7 @@ You need at least **one Ollama model with tool-calling support**:
 | `huihui_ai/qwen2.5-1m-abliterated:14b` | 9.0 GB | 14 GB | ⚡⚡ Medium | ⭐⭐⭐⭐ Great |
 | `huihui_ai/qwen3-abliterated:14b` | 9.0 GB | 14 GB | ⚡⚡ Medium | ⭐⭐⭐⭐ Great |
 
-**Default model:** `qwen3.5:9b` (higher-quality default for chat-first interactive use)
+**Default chat model:** `jikepjikep_16HEX/gemma-4-e4b-nightshift-heretic-uncensored-q4:latest`. Diagnostic agent mode requires a model with tool support.
 
 ---
 
@@ -189,7 +193,7 @@ brew install ollama
 ollama pull qwen3.5:4b
 
 # Default recommended model
-ollama pull qwen3.5:9b
+ollama pull jikepjikep_16HEX/gemma-4-e4b-nightshift-heretic-uncensored-q4:latest
 
 # Lightweight model for low-RAM systems
 ollama pull llama3.2:3b
@@ -227,8 +231,7 @@ python main.py --list-models
 Expected output:
 ```
 [ok] Ollama reachable at http://localhost:11434
-[ok] Model available: qwen3.5:9b
-[ok] Tool calling supported: qwen3.5:9b
+[ok] Model available: jikepjikep_16HEX/gemma-4-e4b-nightshift-heretic-uncensored-q4:latest
 ```
 
 ---
@@ -249,7 +252,9 @@ run.bat
 
 This now starts the default interactive Gemini-CLI-like mode:
 - streaming enabled
-- model `qwen3.5:9b`
+- model `jikepjikep_16HEX/gemma-4-e4b-nightshift-heretic-uncensored-q4:latest`
+- conversation history until `/reset` or exit
+- use `--agent` for diagnostic tools
 
 **Fast Launch (skip Ollama check):**
 ```bat
@@ -269,7 +274,7 @@ run-unsafe.bat
 ### Using Command Line
 
 ```bash
-# Interactive streaming session (default model: qwen3.5:9b)
+# Interactive streaming session with the default Gemma model
 python main.py
 
 # Streaming is already enabled by default
@@ -450,8 +455,13 @@ overridden with an environment variable.
 | Variable | Default | Description |
 |---|---|---|
 | `MEDFARL_LLM_URL` | `http://localhost:11434` | Ollama or any OpenAI-compatible endpoint |
-| `MEDFARL_MODEL` | `qwen3.5:9b` | Model name as Ollama knows it |
+| `MEDFARL_MODEL` | `jikepjikep_16HEX/gemma-4-e4b-nightshift-heretic-uncensored-q4:latest` | Model name as Ollama knows it |
 | `MEDFARL_TIMEOUT` | `120` | HTTP timeout in seconds for LLM calls |
+| `MEDFARL_KEEP_ALIVE` | `30m` | How long Ollama keeps the loaded model in memory |
+| `MEDFARL_AUTOSTART_OLLAMA` | `1` | Start `ollama serve` automatically when the API is unreachable |
+| `MEDFARL_WARMUP` | `1` | Preload the selected model before the first prompt |
+| `MEDFARL_CHAT_SYSTEM_PROMPT` | built-in Ukrainian prompt | System prompt for direct chat mode |
+| `MEDFARL_CHAT_REASONING_EFFORT` | `none` | Reasoning level for chat; empty string leaves the model default |
 | `MEDFARL_MAX_TOOL_STEPS` | `8` | Maximum tool call iterations per user turn |
 | `MEDFARL_ALLOWED_READ_ROOTS` | current workspace | `os.pathsep`-separated roots for file read access |
 | `MEDFARL_ALLOWED_EDIT_ROOTS` | current workspace | Roots where text files/directories can be created or edited |
@@ -485,7 +495,7 @@ MEDFARL_LLM_URL=http://localhost:1337 python main.py
 # Read-only properties
 settings.llm_url         # → http://localhost:11434
 settings.llm_base_url    # → same as llm_url
-settings.model           # → qwen3.5:9b
+settings.model           # → jikepjikep_16HEX/gemma-4-e4b-nightshift-heretic-uncensored-q4:latest
 settings.llm_model       # → same as model
 settings.timeout         # → 120
 settings.llm_timeout     # → same as timeout
@@ -530,7 +540,7 @@ gemma-abliterated:latest                71e17c56807f    7.3 GB    7 months ago
 | Model | Size | RAM | Speed | Quality | Use Case |
 |-------|------|-----|-------|---------|----------|
 | `qwen3.5:4b` | 3.4 GB | 6 GB | ⚡⚡⚡ | ⭐⭐⭐ | Faster fallback |
-| `qwen3.5:9b` | 6.6 GB | 10 GB | ⚡⚡ | ⭐⭐⭐⭐ | **Default** — better reasoning |
+| `qwen3.5:9b` | 6.6 GB | 10 GB | ⚡⚡ | ⭐⭐⭐⭐ | Optional diagnostic model |
 | `llama3.2:3b` | 2.0 GB | 4 GB | ⚡⚡⚡⚡ | ⭐⭐ | Low-RAM systems |
 | `gemma-abliterated` | 7.3 GB | 10 GB | ⚡⚡ | ⭐⭐⭐⭐ | Uncensored |
 | `gpt-oss-20b` | 11 GB | 16 GB | ⚡ | ⭐⭐⭐⭐⭐ | Maximum quality |
@@ -556,10 +566,10 @@ Windows batch files for quick launching:
 | Script | Description |
 |--------|-------------|
 | `Medfarl_Menu.bat` | **Interactive menu** with all models and modes |
-| `run.bat` | Default interactive streaming launch with `qwen3.5:9b` |
+| `run.bat` | Direct streaming chat with the configured Gemma model |
 | `run-quick.bat` | Fast default launch without Ollama healthcheck |
 | `run-unsafe.bat` | Full filesystem + shell access mode |
-| `run-streaming.bat` | Explicit streaming launcher pinned to `qwen3.5:9b` |
+| `run-streaming.bat` | Direct streaming chat; respects `--model` and `MEDFARL_MODEL` |
 
 ### Menu Options
 
@@ -568,7 +578,7 @@ Windows batch files for quick launching:
     Medfarl AI System - Меню запуску
 ========================================
 
-ДОСТУПНІ МОДЕЛІ:
+ДОДАТКОВІ МОДЕЛІ (потребують встановлення):
 1. qwen3.5:4b         (3.4 GB - швидка)
 2. qwen3.5:9b         (6.6 GB - якісна)
 3. llama3.2:3b        (2.0 GB - легка)
@@ -579,14 +589,16 @@ Windows batch files for quick launching:
 8. Cloud моделі       (gemini, kimi, deepseek, qwen-coder)
 
 ЗАПУСК:
-10. Запуск за замовчуванням (Streaming, qwen3.5:9b)
+9. Чат із Gemma за замовчуванням
+10. Стандартний чат (Streaming, налаштована модель)
 11. Швидкий запуск (Streaming, без перевірки)
 12. Режим повного доступу (Unsafe)
 13. Перевірка здоров'я
 14. Список моделей
 15. Бенчмарк (порівняння моделей)
-16. ІНТЕРАКТИВНИЙ РЕЖИМ (Streaming як Gemini CLI, qwen3.5:9b)
+16. ІНТЕРАКТИВНИЙ ЧАТ (Streaming, налаштована модель)
 17. Вихід
+18. Агент діагностики ПК
 ```
 
 ---
@@ -601,10 +613,12 @@ usage: main.py [-h] [--model MODEL] [--list-models] [--healthcheck]
 Medfarl AI System
 
 options:
+  --agent                     Enable diagnostic agent mode and tools
+  --no-warmup                 Skip automatic Ollama startup and model preload
   --model MODEL               Override default Ollama model for this run
   --list-models               List installed Ollama models and exit
   --healthcheck               Check Ollama connectivity, model availability,
-                              and tool support, then exit
+                              and tool support with --agent, then exit
   --benchmark-models MODEL    Run short benchmark across specified models
   --skip-healthcheck          Skip startup healthcheck before interactive session
   --timeout TIMEOUT           Override HTTP timeout in seconds for LLM calls
@@ -950,7 +964,7 @@ Prevents prompt injection via command arguments.
 
 ## Safety Model
 
-By default, Medfarl is intentionally a controlled diagnostics + maintenance assistant,
+In --agent mode, Medfarl is a controlled diagnostics + maintenance assistant,
 not an unrestricted automation platform.
 
 ### Guardrails

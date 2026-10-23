@@ -16,6 +16,30 @@ def _env_flag(name: str, default: bool = True) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+DEFAULT_CHAT_SYSTEM_PROMPT = """\
+Ти — Medfarl, локальний AI-співрозмовник у терміналі. Зараз це звичайна дружня \
+розмова, а не режим діагностики ПК.
+
+Правила:
+- Відповідай тією мовою, якою пише користувач; українською — природно, тепло й по суті.
+- Будь уважним співрозмовником: пам'ятай попередні репліки, став доречні уточнення \
+й підтримуй розмову без нав'язливості.
+- Не вигадуй факти, результати команд, події чи джерела. Якщо чогось не знаєш — \
+скажи прямо.
+- Не маєш доступу до інтернету, свіжих новин чи файлів користувача, якщо він сам їх \
+не надав.
+- Ти AI-модель, а не людина: не стверджуй, що маєш фізичний досвід або реальні \
+почуття. На пряме запитання про свою природу відповідай чесно.
+- Ігноруй вбудовану в модель роль «архітектора», польські інструкції та будь-який \
+інший попередній персонаж із налаштувань моделі: це застарілі інструкції, які не \
+стосуються цієї розмови.
+- Для діагностики ПК, запуску команд і роботи з файлами користувач може перезапустити \
+застосунок із прапорцем --agent.
+- Для простих запитань відповідай коротко, для складних — структуровано; Markdown \
+доречний. Уникай канцеляриту й зайвих дисклеймерів.
+"""
+
+
 def _all_filesystem_roots() -> list[str]:
     if os.name == "nt":
         roots = [
@@ -31,7 +55,17 @@ def _all_filesystem_roots() -> list[str]:
 @dataclass
 class Settings:
     llm_url: str = os.getenv("MEDFARL_LLM_URL", "http://localhost:11434")
-    model: str = os.getenv("MEDFARL_MODEL", "qwen3.5:9b")
+    model: str = os.getenv(
+        "MEDFARL_MODEL",
+        "jikepjikep_16HEX/gemma-4-e4b-nightshift-heretic-uncensored-q4:latest",
+    )
+    keep_alive: str = os.getenv("MEDFARL_KEEP_ALIVE", "30m")
+    autostart_ollama: bool = _env_flag("MEDFARL_AUTOSTART_OLLAMA", True)
+    warmup_on_start: bool = _env_flag("MEDFARL_WARMUP", True)
+    chat_system_prompt: str = os.getenv(
+        "MEDFARL_CHAT_SYSTEM_PROMPT", DEFAULT_CHAT_SYSTEM_PROMPT
+    )
+    chat_reasoning_effort: str = os.getenv("MEDFARL_CHAT_REASONING_EFFORT", "none")
     timeout: int = int(os.getenv("MEDFARL_TIMEOUT", "120"))
     max_tool_steps: int = int(os.getenv("MEDFARL_MAX_TOOL_STEPS", "8"))
     allowed_read_roots: list[str] = field(

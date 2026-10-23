@@ -10,7 +10,7 @@ echo ========================================
 echo     Medfarl AI System - Launch Menu
 echo ========================================
 echo.
-echo  AVAILABLE MODELS:
+echo  OPTIONAL MODELS ^(must be installed in Ollama^):
 echo  1. qwen3.5:4b         ^(3.4 GB - fast^)
 echo  2. qwen3.5:9b         ^(6.6 GB - quality^)
 echo  3. llama3.2:3b        ^(2.0 GB - light^)
@@ -19,20 +19,23 @@ echo  5. gpt-oss-20b        ^(11 GB - powerful^)
 echo  6. qwen2.5-1m:14b     ^(9.0 GB - large context^)
 echo  7. qwen3:14b          ^(9.0 GB - uncensored^)
 echo  8. Cloud models       ^(gemini, kimi, deepseek, qwen-coder^)
+echo  9. Default Gemma model ^(interactive chat^)
 echo.
 echo  ACTIONS:
-echo  10. Default launch ^(Streaming, qwen3.5:9b^)
+echo  10. Default launch ^(Streaming chat, configured Gemma model^)
 echo  11. Quick launch ^(Streaming, skip healthcheck^)
 echo  12. Full access mode ^(Unsafe^)
 echo  13. Healthcheck
 echo  14. List models
 echo  15. Benchmark ^(compare models^)
-echo  16. INTERACTIVE MODE ^(Streaming like Gemini CLI, qwen3.5:9b^)
+echo  16. INTERACTIVE MODE ^(Streaming chat, configured Gemma model^)
 echo  17. Exit
+echo  18. PC diagnostics agent ^(requires a model with tool support^)
 echo.
 echo ========================================
 
-set /p choice="Choose an option (1-17): "
+set "choice=10"
+set /p choice="Choose an option (1-18, Enter = chat): "
 
 if "%choice%"=="1" goto model_qwen_4b
 if "%choice%"=="2" goto model_qwen_9b
@@ -42,6 +45,7 @@ if "%choice%"=="5" goto model_gpt_20b
 if "%choice%"=="6" goto model_qwen25_14b
 if "%choice%"=="7" goto model_qwen3_14b
 if "%choice%"=="8" goto cloud_models
+if "%choice%"=="9" goto default_gemma
 if "%choice%"=="10" goto normal
 if "%choice%"=="11" goto quick
 if "%choice%"=="12" goto unsafe
@@ -50,6 +54,7 @@ if "%choice%"=="14" goto listmodels
 if "%choice%"=="15" goto benchmark
 if "%choice%"=="16" goto streaming
 if "%choice%"=="17" goto end
+if "%choice%"=="18" goto agent
 
 echo Invalid choice!
 pause
@@ -106,7 +111,7 @@ goto menu
 
 :normal
 echo.
-echo Starting default mode ^(Streaming + qwen3.5:9b^) ...
+echo Starting interactive chat with the configured model ...
 call "%~dp0run.bat"
 goto menu
 
@@ -142,8 +147,17 @@ goto menu
 
 :streaming
 echo.
-echo Starting interactive streaming mode ^(qwen3.5:9b^) ...
+echo Starting interactive streaming chat with the configured model ...
 call "%~dp0run-streaming.bat"
+goto menu
+
+:default_gemma
+call "%~dp0run.bat" --model jikepjikep_16HEX/gemma-4-e4b-nightshift-heretic-uncensored-q4:latest
+goto menu
+
+:agent
+call "%~dp0run.bat" --agent
+pause
 goto menu
 
 :end

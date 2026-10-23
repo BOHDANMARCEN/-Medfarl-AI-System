@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
@@ -26,6 +30,7 @@ class LLMClient:
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
         stream: bool = False,
+        reasoning_effort: Optional[str] = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "model": self.model,
@@ -34,6 +39,8 @@ class LLMClient:
         }
         if tools:
             payload["tools"] = tools
+        if reasoning_effort:
+            payload["reasoning_effort"] = reasoning_effort
 
         # Streaming mode for interactive output
         if stream:
@@ -153,7 +160,7 @@ class LLMClient:
             "tool_call_id": tool_call_id,
         }
 
-    def healthcheck(self) -> Dict[str, Any]:
+    def healthcheck(self, *, require_tools: bool = True) -> Dict[str, Any]:
         result: Dict[str, Any] = {
             "ok": False,
             "base_url": self.base_url,
@@ -192,6 +199,10 @@ class LLMClient:
                 f"Model '{self.model}' is not available in Ollama. "
                 "Pull it first or set MEDFARL_MODEL to an installed model."
             )
+            return result
+
+        if not require_tools:
+            result["ok"] = True
             return result
 
         tool_payload = {
@@ -253,6 +264,129 @@ class LLMClient:
                 "error": str(exc),
             }
         return {"reachable": True, "base_url": self.base_url}
+
+    def ensure_server(self, start_timeout: int = 20) -> Dict[str, Any]:
+        if self.server_check(timeout=2)["reachable"]:
+            return {
+                "ok": True,
+                "started": False,
+                "base_url": self.base_url,
+            }
+
+        if not self._start_ollama_server():
+            return {
+                "ok": False,
+                "started": False,
+                "base_url": self.base_url,
+                "error": (
+                    f"Ollama is not reachable at {self.base_url} and the "
+                    "'ollama' executable was not found."
+                ),
+            }
+
+        deadline = time.monotonic() + max(1, start_timeout)
+        while time.monotonic() < deadline:
+            if self.server_check(timeout=2)["reachable"]:
+                return {
+                    "ok": True,
+                    "started": True,
+                    "base_url": self.base_url,
+                }
+            time.sleep(0.5)
+
+        return {
+            "ok": False,
+            "started": True,
+            "base_url": self.base_url,
+            "error": (
+                f"Ollama was started but did not become reachable at "
+                f"{self.base_url} within {start_timeout}s."
+            ),
+        }
+
+    def _start_ollama_server(self) -> bool:
+        executable = shutil.which("ollama")
+        if not executable:
+            return False
+
+        kwargs: Dict[str, Any] = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+        }
+        if os.name == "nt":
+            kwargs["creationflags"] = (
+                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+            )
+        else:
+            kwargs["start_new_session"] = True
+
+        try:
+            subprocess.Popen([executable, "serve"], **kwargs)
+        except OSError:
+            return False
+        return True
+
+    def warmup(
+        self,
+        keep_alive: Optional[str] = None,
+        autostart: bool = True,
+    ) -> Dict[str, Any]:
+        if autostart:
+            server = self.ensure_server()
+        else:
+            reachable = self.server_check(timeout=2)["reachable"]
+            server = {
+                "ok": reachable,
+                "started": False,
+                "base_url": self.base_url,
+                "error": f"Cannot reach Ollama at {self.base_url}.",
+            }
+
+        if not server["ok"]:
+            return {
+                "ok": False,
+                "model": self.model,
+                "started": server.get("started", False),
+                "error": server.get("error", "Ollama is not reachable."),
+            }
+
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "prompt": "",
+            "stream": False,
+        }
+        if keep_alive:
+            payload["keep_alive"] = keep_alive
+
+        try:
+            response = httpx.post(
+                f"{self.base_url}/api/generate",
+                json=payload,
+                timeout=max(self.timeout, 60),
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text if exc.response is not None else str(exc)
+            return {
+                "ok": False,
+                "model": self.model,
+                "started": server.get("started", False),
+                "error": f"Cannot load model '{self.model}': {detail}",
+            }
+        except httpx.HTTPError as exc:
+            return {
+                "ok": False,
+                "model": self.model,
+                "started": server.get("started", False),
+                "error": f"Cannot load model '{self.model}': {exc}",
+            }
+
+        return {
+            "ok": True,
+            "model": self.model,
+            "started": server.get("started", False),
+        }
 
     def list_models(self) -> List[str]:
         response = httpx.get(f"{self.base_url}/api/tags", timeout=min(self.timeout, 10))

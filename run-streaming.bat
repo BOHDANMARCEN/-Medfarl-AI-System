@@ -10,6 +10,6 @@ echo Інтерактивний режим - відповіді з'являют�
 echo Як Gemini CLI або ChatGPT
 echo.
 
-call "%~dp0run.bat" --stream --model qwen3.5:9b %*
+call "%~dp0run.bat" --stream %*
 
 exit /b %ERRORLEVEL%

@@ -6,6 +6,7 @@ import sys
 
 from config import settings
 from core.agent import MedfarlAgent
+from core.chat import ChatSession
 from core.llm_client import LLMClient
 from ui.cli import configure_console, print_banner, prompt_user
 
@@ -28,14 +29,17 @@ def build_client_with_timeout(
     )
 
 
-def run_healthcheck(model: str | None = None, timeout: int | None = None) -> int:
+def run_healthcheck(
+    model: str | None = None, timeout: int | None = None, *, require_tools: bool = True
+) -> int:
     client = build_client_with_timeout(model, timeout)
-    result = client.healthcheck()
+    result = client.healthcheck(require_tools=require_tools)
 
     if result["ok"]:
         print(f"[ok] Ollama reachable at {result['base_url']}")
         print(f"[ok] Model available: {result['model']}")
-        print(f"[ok] Tool calling supported: {result['model']}")
+        if require_tools:
+            print(f"[ok] Tool calling supported: {result['model']}")
         return 0
 
     print(f"[error] {result['error']}")
@@ -105,6 +109,10 @@ def run_benchmark(models: list[str], timeout: int | None = None) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Medfarl AI System")
     parser.add_argument(
+        "--agent", action="store_true",
+        help="enable PC diagnostics and tools instead of direct model chat",
+    )
+    parser.add_argument(
         "--model", help="override the default Ollama model for this run"
     )
     parser.add_argument(
@@ -115,7 +123,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--healthcheck",
         action="store_true",
-        help="check Ollama connectivity, model availability, and tool support, then exit",
+        help="check Ollama and model availability (also tool support with --agent)",
     )
     parser.add_argument(
         "--benchmark-models",
@@ -127,6 +135,11 @@ def parse_args() -> argparse.Namespace:
         "--skip-healthcheck",
         action="store_true",
         help="skip startup healthcheck before opening the interactive session",
+    )
+    parser.add_argument(
+        "--no-warmup",
+        action="store_true",
+        help="do not start Ollama or preload the selected model",
     )
     parser.add_argument(
         "--timeout",
@@ -151,17 +164,20 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _cli_help_text(unsafe_mode: bool) -> str:
+def _cli_help_text(unsafe_mode: bool, agent_mode: bool = True) -> str:
     lines = [
         "CLI commands:",
         "- /help   show interactive help",
-        "- /reset  clear session history and bootstrap context",
+        "- /reset  clear session history",
         "- /status show current model and mode",
-        "- /tools  list registered tools for this session",
         "- /quit   exit the session",
         "- /q      short exit alias",
         "- exit    exit the session",
     ]
+    if not agent_mode:
+        lines.append("- Direct model chat. Launch with --agent for PC diagnostics and tools.")
+        return "\n".join(lines)
+    lines.append("- /tools  list registered tools for this session")
     if unsafe_mode:
         lines.append(
             "- unsafe mode is ON: full filesystem, CMD, PowerShell, and program execution are available"
@@ -181,7 +197,14 @@ def _cli_help_text(unsafe_mode: bool) -> str:
     return "\n".join(lines)
 
 
-def _cli_status_text(selected_model: str, selected_timeout: int) -> str:
+def _cli_status_text(
+    selected_model: str, selected_timeout: int, agent_mode: bool = True
+) -> str:
+    if not agent_mode:
+        return "\n".join([
+            "Session status:", f"- model: {selected_model}",
+            f"- timeout: {selected_timeout}", "- mode: direct chat",
+        ])
     mode = "unsafe-full-access" if settings.unsafe_full_access else "guarded"
     return "\n".join(
         [
@@ -209,26 +232,59 @@ def main() -> None:
     selected_model = args.model or settings.model
     selected_timeout = args.timeout or settings.timeout
     enable_streaming = not args.no_stream
+    agent_mode = args.agent or settings.unsafe_full_access
 
     if args.list_models:
         raise SystemExit(list_models(selected_model, selected_timeout))
 
+    if (
+        not args.no_warmup
+        and settings.warmup_on_start
+        and not args.benchmark_models
+    ):
+        warmup_client = build_client_with_timeout(selected_model, selected_timeout)
+        print(f"[..] Loading model into Ollama: {selected_model}")
+        warmup_result = warmup_client.warmup(
+            keep_alive=settings.keep_alive,
+            autostart=settings.autostart_ollama,
+        )
+        if warmup_result["ok"]:
+            print(f"[ok] Model ready: {warmup_result['model']}")
+        else:
+            print(f"[warn] {warmup_result['error']}")
+
     if args.healthcheck:
-        raise SystemExit(run_healthcheck(selected_model, selected_timeout))
+        raise SystemExit(run_healthcheck(
+            selected_model, selected_timeout, require_tools=agent_mode
+        ))
 
     if args.benchmark_models:
         raise SystemExit(run_benchmark(args.benchmark_models, selected_timeout))
 
     if not args.skip_healthcheck:
-        preflight_code = run_healthcheck(selected_model, selected_timeout)
+        preflight_code = run_healthcheck(
+            selected_model, selected_timeout, require_tools=agent_mode
+        )
         if preflight_code != 0:
             print(
                 "[hint] Run `python main.py --healthcheck` for details after fixing Ollama."
             )
             raise SystemExit(preflight_code)
 
-    print_banner(unsafe_mode=settings.unsafe_full_access)
-    agent = MedfarlAgent(model=selected_model, timeout=selected_timeout)
+    if agent_mode:
+        print_banner(unsafe_mode=settings.unsafe_full_access)
+        agent = MedfarlAgent(model=selected_model, timeout=selected_timeout)
+    else:
+        print(f"\nMedfarl — інтерактивний чат\nМодель: {selected_model}")
+        print(
+            "Пишіть повідомлення й натискайте Enter. /reset — нова розмова, "
+            "/quit — вихід.\n"
+        )
+        agent = ChatSession(
+            build_client_with_timeout(selected_model, selected_timeout),
+            system_prompt=settings.chat_system_prompt,
+            reasoning_effort=settings.chat_reasoning_effort,
+        )
     shell_mode: str | None = None
     shell_lines: list[str] = []
 
@@ -282,7 +338,7 @@ def main() -> None:
 
         lowered = user_input.strip().lower()
         if lowered in {"/help", "help cli"}:
-            print(f"\n{_cli_help_text(settings.unsafe_full_access)}\n")
+            print(f"\n{_cli_help_text(settings.unsafe_full_access, agent_mode)}\n")
             continue
 
         if lowered in {"/reset", "reset chat"}:
@@ -291,10 +347,13 @@ def main() -> None:
             continue
 
         if lowered in {"/status", "status cli"}:
-            print(f"\n{_cli_status_text(selected_model, selected_timeout)}\n")
+            print(f"\n{_cli_status_text(selected_model, selected_timeout, agent_mode)}\n")
             continue
 
         if lowered in {"/tools", "tools cli"}:
+            if not agent_mode:
+                print("\nДля діагностики ПК та інструментів запустіть run.bat --agent.\n")
+                continue
             tool_names = "\n".join(f"- {tool.name}" for tool in agent.tool_registry)
             print(f"\nRegistered tools:\n{tool_names}\n")
             continue

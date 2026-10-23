@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(run.bat)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)"
     ]
   },
   "$version": 3
