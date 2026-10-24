@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import os
 import time
 import sys
 
 from config import settings
 from core.agent import MedfarlAgent
 from core.chat import ChatSession
+from core.coder import CoderSession, run_coder_cli
 from core.llm_client import LLMClient
 from ui.cli import configure_console, print_banner, prompt_user
 
@@ -108,10 +110,13 @@ def run_benchmark(models: list[str], timeout: int | None = None) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Medfarl AI System")
-    parser.add_argument(
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument(
         "--agent", action="store_true",
         help="enable PC diagnostics and tools instead of direct model chat",
     )
+    modes.add_argument("--coder", action="store_true", help="interactive project coding agent with approval prompts")
+    parser.add_argument("--workspace", default=os.getcwd(), help="project directory for --coder")
     parser.add_argument(
         "--model", help="override the default Ollama model for this run"
     )
@@ -123,7 +128,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--healthcheck",
         action="store_true",
-        help="check Ollama and model availability (also tool support with --agent)",
+        help="check Ollama and model availability (also tool support with --agent or --coder)",
     )
     parser.add_argument(
         "--benchmark-models",
@@ -149,7 +154,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--unsafe-full-access",
         action="store_true",
-        help="enable unrestricted local filesystem, shell, and program access for this session",
+        help="full access for diagnostics; in coder mode ask to expand file access, retaining action approvals",
     )
     parser.add_argument(
         "--stream",
@@ -226,13 +231,21 @@ def main() -> None:
     configure_console()
     args = parse_args()
 
-    if args.unsafe_full_access:
+    if args.unsafe_full_access and not args.coder:
         settings.enable_unsafe_full_access()
 
-    selected_model = args.model or settings.model
+    selected_model = args.model or (os.getenv("MEDFARL_CODER_MODEL", settings.model) if args.coder else settings.model)
     selected_timeout = args.timeout or settings.timeout
     enable_streaming = not args.no_stream
-    agent_mode = args.agent or settings.unsafe_full_access
+    agent_mode = args.agent or args.coder or settings.unsafe_full_access
+
+    coder = None
+    if args.coder:
+        try:
+            coder = CoderSession(build_client_with_timeout(selected_model, selected_timeout), args.workspace)
+        except (OSError, ValueError) as exc:
+            print(f"[error] {exc}")
+            raise SystemExit(2)
 
     if args.list_models:
         raise SystemExit(list_models(selected_model, selected_timeout))
@@ -270,6 +283,12 @@ def main() -> None:
                 "[hint] Run `python main.py --healthcheck` for details after fixing Ollama."
             )
             raise SystemExit(preflight_code)
+
+    if coder is not None:
+        if args.unsafe_full_access:
+            coder.set_full_access(True)
+        run_coder_cli(coder, stream=enable_streaming)
+        return
 
     if agent_mode:
         print_banner(unsafe_mode=settings.unsafe_full_access)

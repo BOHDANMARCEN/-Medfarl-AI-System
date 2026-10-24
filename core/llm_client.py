@@ -78,6 +78,7 @@ class LLMClient:
                     "arguments": arguments,
                 },
                 "tool_call_id": raw.get("id", "call_0"),
+                "tool_calls": tool_calls,
             }
 
         return {
@@ -92,7 +93,7 @@ class LLMClient:
     def _stream_response(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Stream response tokens in real-time like Gemini CLI."""
         full_content = ""
-        tool_calls = []
+        tool_call_parts = {}
         tool_call_id = None
 
         with httpx.stream(
@@ -119,9 +120,17 @@ class LLMClient:
                     # Collect tool calls if present
                     if delta.get("tool_calls"):
                         for tc in delta["tool_calls"]:
-                            tool_calls.append(tc)
+                            index = tc.get("index", 0)
+                            assembled = tool_call_parts.setdefault(index, {
+                                "id": f"call_{index}", "type": "function",
+                                "function": {"name": "", "arguments": ""},
+                            })
                             if tc.get("id"):
-                                tool_call_id = tc["id"]
+                                assembled["id"] = tc["id"]
+                            fragment = tc.get("function") or {}
+                            for key in ("name", "arguments"):
+                                if fragment.get(key):
+                                    assembled["function"][key] += fragment[key]
 
                     # Collect content tokens
                     content = delta.get("content", "")
@@ -134,9 +143,11 @@ class LLMClient:
                     continue
 
         # Parse tool calls if any
+        tool_calls = [tool_call_parts[index] for index in sorted(tool_call_parts)]
         parsed_tool_call = None
         if tool_calls:
             raw = tool_calls[0]
+            tool_call_id = raw["id"]
             function = raw.get("function", {})
             arguments = function.get("arguments") or "{}"
 
@@ -158,6 +169,7 @@ class LLMClient:
             },
             "tool_call": parsed_tool_call,
             "tool_call_id": tool_call_id,
+            "tool_calls": tool_calls,
         }
 
     def healthcheck(self, *, require_tools: bool = True) -> Dict[str, Any]:

@@ -57,7 +57,7 @@ class Settings:
     llm_url: str = os.getenv("MEDFARL_LLM_URL", "http://localhost:11434")
     model: str = os.getenv(
         "MEDFARL_MODEL",
-        "jikepjikep_16HEX/gemma-4-e4b-nightshift-heretic-uncensored-q4:latest",
+        "tripolskypetr/qwen3.5-uncensored-aggressive:9b",
     )
     keep_alive: str = os.getenv("MEDFARL_KEEP_ALIVE", "30m")
     autostart_ollama: bool = _env_flag("MEDFARL_AUTOSTART_OLLAMA", True)

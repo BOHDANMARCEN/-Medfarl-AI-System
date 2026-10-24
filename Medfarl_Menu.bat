@@ -19,23 +19,24 @@ echo  5. gpt-oss-20b        ^(11 GB - powerful^)
 echo  6. qwen2.5-1m:14b     ^(9.0 GB - large context^)
 echo  7. qwen3:14b          ^(9.0 GB - uncensored^)
 echo  8. Cloud models       ^(gemini, kimi, deepseek, qwen-coder^)
-echo  9. Default Gemma model ^(interactive chat^)
+echo  9. Default Qwen 9B model ^(interactive chat^)
 echo.
 echo  ACTIONS:
-echo  10. Default launch ^(Streaming chat, configured Gemma model^)
+echo  10. Default launch ^(Streaming chat, configured model^)
 echo  11. Quick launch ^(Streaming, skip healthcheck^)
 echo  12. Full access mode ^(Unsafe^)
 echo  13. Healthcheck
 echo  14. List models
 echo  15. Benchmark ^(compare models^)
-echo  16. INTERACTIVE MODE ^(Streaming chat, configured Gemma model^)
+echo  16. INTERACTIVE MODE ^(Streaming chat, configured model^)
 echo  17. Exit
 echo  18. PC diagnostics agent ^(requires a model with tool support^)
+echo  19. CODER ^(project files, edits, tests; asks before changes^)
 echo.
 echo ========================================
 
 set "choice=10"
-set /p choice="Choose an option (1-18, Enter = chat): "
+set /p choice="Choose an option (1-19, Enter = chat): "
 
 if "%choice%"=="1" goto model_qwen_4b
 if "%choice%"=="2" goto model_qwen_9b
@@ -45,7 +46,7 @@ if "%choice%"=="5" goto model_gpt_20b
 if "%choice%"=="6" goto model_qwen25_14b
 if "%choice%"=="7" goto model_qwen3_14b
 if "%choice%"=="8" goto cloud_models
-if "%choice%"=="9" goto default_gemma
+if "%choice%"=="9" goto default_model
 if "%choice%"=="10" goto normal
 if "%choice%"=="11" goto quick
 if "%choice%"=="12" goto unsafe
@@ -55,6 +56,7 @@ if "%choice%"=="15" goto benchmark
 if "%choice%"=="16" goto streaming
 if "%choice%"=="17" goto end
 if "%choice%"=="18" goto agent
+if "%choice%"=="19" goto coder
 
 echo Invalid choice!
 pause
@@ -151,12 +153,17 @@ echo Starting interactive streaming chat with the configured model ...
 call "%~dp0run-streaming.bat"
 goto menu
 
-:default_gemma
-call "%~dp0run.bat" --model jikepjikep_16HEX/gemma-4-e4b-nightshift-heretic-uncensored-q4:latest
+:default_model
+call "%~dp0run.bat" --model tripolskypetr/qwen3.5-uncensored-aggressive:9b
 goto menu
 
 :agent
 call "%~dp0run.bat" --agent
+pause
+goto menu
+
+:coder
+call "%~dp0run-coder.bat"
 pause
 goto menu
 

@@ -14,11 +14,49 @@ services — then explains findings in plain language. Can also run maintenance 
 through guarded tools with explicit approval.
 
 **Default mode:** Run `run.bat` for a direct, interactive streaming chat with
-`jikepjikep_16HEX/gemma-4-e4b-nightshift-heretic-uncensored-q4:latest`.
+`tripolskypetr/qwen3.5-uncensored-aggressive:9b`.
 Ollama starts automatically if needed and the model is loaded before the prompt.
 Conversation history is kept until `/reset` or exit. Use `/quit` to leave.
 The diagnostic assistant described below is available through `run.bat --agent`;
 that mode requires tool support. Override the model with `--model` or `MEDFARL_MODEL`.
+
+### Interactive coder mode
+
+Run `run-coder.bat` or choose **19** in `Medfarl_Menu.bat` to work on code through
+an interactive terminal conversation. This is Medfarl's local coding workflow,
+using Ollama; it does not install or invoke Gemini CLI.
+
+```powershell
+.\run-coder.bat
+.\run-coder.bat --workspace "E:\My Project"
+.\run-coder.bat --workspace "E:\My Project" --model "your-installed-tool-model"
+# Equivalent without the launcher:
+python main.py --coder --workspace "E:\My Project"
+```
+
+The coder can list files, search text, read files with line numbers, create files,
+replace an exact text fragment, and run tests/builds through PowerShell, CMD or sh.
+It sends tool results back to the model and continues until it responds or reaches
+20 steps. Streaming is enabled; use `--no-stream` to disable it. A model supporting
+tool calling is required. `--model` takes precedence over `MEDFARL_CODER_MODEL`,
+which defaults to the normal configured chat model. Models are not downloaded automatically.
+
+File tools are restricted to the selected project by default. Writes show a diff
+and require `y`, `yes` or `так`; Enter or EOF denies the operation. Every shell command
+shows its working directory, exact command and timeout and requires confirmation.
+**Shell commands are not sandboxed**: an approved command has the current OS user's
+file and network access, even in project mode. They do not elevate administrator rights.
+Refusing an action stops the current task; already completed changes remain.
+
+Use `/access full` to request file access outside the project with a separate
+confirmation, and `/access project` to revoke it. Coder mode retains action approvals
+even with `--unsafe-full-access`; this flag asks to expand access at startup.
+The legacy diagnostic unsafe mode is separate.
+
+Commands: `/help`, `/status`, `/tools`, `/reset`, `/quit`, `/access full`,
+`/access project`. `/reset` clears conversation history, not files or permissions.
+History is held in memory for the session; long sessions may require `/reset`.
+Example task: “Read the project instructions, fix the parser bug, and run its tests.”
 
 ---
 
@@ -119,7 +157,7 @@ You need at least **one Ollama model with tool-calling support**:
 | `huihui_ai/qwen2.5-1m-abliterated:14b` | 9.0 GB | 14 GB | ⚡⚡ Medium | ⭐⭐⭐⭐ Great |
 | `huihui_ai/qwen3-abliterated:14b` | 9.0 GB | 14 GB | ⚡⚡ Medium | ⭐⭐⭐⭐ Great |
 
-**Default chat model:** `jikepjikep_16HEX/gemma-4-e4b-nightshift-heretic-uncensored-q4:latest`. Diagnostic agent mode requires a model with tool support.
+**Default chat model:** `tripolskypetr/qwen3.5-uncensored-aggressive:9b`. Diagnostic agent mode requires a model with tool support.
 
 ---
 
@@ -193,7 +231,7 @@ brew install ollama
 ollama pull qwen3.5:4b
 
 # Default recommended model
-ollama pull jikepjikep_16HEX/gemma-4-e4b-nightshift-heretic-uncensored-q4:latest
+ollama pull tripolskypetr/qwen3.5-uncensored-aggressive:9b
 
 # Lightweight model for low-RAM systems
 ollama pull llama3.2:3b
@@ -231,7 +269,7 @@ python main.py --list-models
 Expected output:
 ```
 [ok] Ollama reachable at http://localhost:11434
-[ok] Model available: jikepjikep_16HEX/gemma-4-e4b-nightshift-heretic-uncensored-q4:latest
+[ok] Model available: tripolskypetr/qwen3.5-uncensored-aggressive:9b
 ```
 
 ---
@@ -252,7 +290,7 @@ run.bat
 
 This now starts the default interactive Gemini-CLI-like mode:
 - streaming enabled
-- model `jikepjikep_16HEX/gemma-4-e4b-nightshift-heretic-uncensored-q4:latest`
+- model `tripolskypetr/qwen3.5-uncensored-aggressive:9b`
 - conversation history until `/reset` or exit
 - use `--agent` for diagnostic tools
 
@@ -274,7 +312,7 @@ run-unsafe.bat
 ### Using Command Line
 
 ```bash
-# Interactive streaming session with the default Gemma model
+# Interactive streaming session with the default Qwen 9B model
 python main.py
 
 # Streaming is already enabled by default
@@ -455,7 +493,7 @@ overridden with an environment variable.
 | Variable | Default | Description |
 |---|---|---|
 | `MEDFARL_LLM_URL` | `http://localhost:11434` | Ollama or any OpenAI-compatible endpoint |
-| `MEDFARL_MODEL` | `jikepjikep_16HEX/gemma-4-e4b-nightshift-heretic-uncensored-q4:latest` | Model name as Ollama knows it |
+| `MEDFARL_MODEL` | `tripolskypetr/qwen3.5-uncensored-aggressive:9b` | Model name as Ollama knows it |
 | `MEDFARL_TIMEOUT` | `120` | HTTP timeout in seconds for LLM calls |
 | `MEDFARL_KEEP_ALIVE` | `30m` | How long Ollama keeps the loaded model in memory |
 | `MEDFARL_AUTOSTART_OLLAMA` | `1` | Start `ollama serve` automatically when the API is unreachable |
@@ -495,7 +533,7 @@ MEDFARL_LLM_URL=http://localhost:1337 python main.py
 # Read-only properties
 settings.llm_url         # → http://localhost:11434
 settings.llm_base_url    # → same as llm_url
-settings.model           # → jikepjikep_16HEX/gemma-4-e4b-nightshift-heretic-uncensored-q4:latest
+settings.model           # → tripolskypetr/qwen3.5-uncensored-aggressive:9b
 settings.llm_model       # → same as model
 settings.timeout         # → 120
 settings.llm_timeout     # → same as timeout
@@ -566,7 +604,7 @@ Windows batch files for quick launching:
 | Script | Description |
 |--------|-------------|
 | `Medfarl_Menu.bat` | **Interactive menu** with all models and modes |
-| `run.bat` | Direct streaming chat with the configured Gemma model |
+| `run.bat` | Direct streaming chat with the configured model |
 | `run-quick.bat` | Fast default launch without Ollama healthcheck |
 | `run-unsafe.bat` | Full filesystem + shell access mode |
 | `run-streaming.bat` | Direct streaming chat; respects `--model` and `MEDFARL_MODEL` |
@@ -589,7 +627,7 @@ Windows batch files for quick launching:
 8. Cloud моделі       (gemini, kimi, deepseek, qwen-coder)
 
 ЗАПУСК:
-9. Чат із Gemma за замовчуванням
+9. Чат із Qwen 9B за замовчуванням
 10. Стандартний чат (Streaming, налаштована модель)
 11. Швидкий запуск (Streaming, без перевірки)
 12. Режим повного доступу (Unsafe)
