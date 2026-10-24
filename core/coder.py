@@ -12,6 +12,8 @@ from typing import Callable
 
 from core.llm_client import LLMClient, Tool
 from core.project_templates import file_list, project_files
+from core.coder_extensions import CoderExtensions, READ_TOOLS, TOOL_ALIASES
+from core.coder_integrations import CoderIntegrations
 
 
 MAX_BYTES = 512 * 1024
@@ -65,13 +67,109 @@ class CoderSession:
             raise ValueError('Робочий шлях має бути папкою.')
         self.max_steps = max_steps
         self.full_access = False
+        self.plan_mode = False
+        self.analysis_only = False
+        self.tasks = []
+        self._touched = set()
+        self._active_skills = set()
+        self._turn_allowed = None
+        self._pending_skill = None
         self._original_files: dict[Path, str | None] = {}
+        self._last_written: dict[Path, str | None] = {}
+        self.extensions = CoderExtensions(self)
+        self.integrations = CoderIntegrations(self)
         self.tool_registry = self._tools()
         self.reset()
 
     def reset(self):
         self.history = []
         self._streamed = False
+        self._active_skills.clear()
+        self._turn_allowed = None
+        self._pending_skill = None
+
+    def close(self):
+        self.integrations.close()
+
+    def _require_edit(self):
+        if self.plan_mode or self.analysis_only:
+            raise PermissionError('Режим планування/аналізу: запис файлів, команди й зовнішні дії заблоковано.')
+
+    def git_info(self, action: str = 'status'):
+        commands = {'status': ['status', '--short', '--branch'],
+                    'diff': ['diff', '--no-ext-diff', '--no-textconv', 'HEAD'],
+                    'log': ['log', '-10', '--oneline']}
+        if action not in commands:
+            raise ValueError('git_info: status, diff або log.')
+        args = ['git', '--no-pager', '-c', f'safe.directory={self.workspace.as_posix()}',
+                '-c', 'core.fsmonitor=false', '-c', 'log.showSignature=false']
+        flags = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
+        environment = {**os.environ, 'GIT_OPTIONAL_LOCKS': '0', 'GIT_NO_LAZY_FETCH': '1'}
+        # Git can otherwise run clean/process filters from repository configuration even on reads.
+        filters = subprocess.run([*args, 'config', '--name-only', '--get-regexp', r'^filter\..*\.(clean|process|required)$'],
+            cwd=self.workspace, stdin=subprocess.DEVNULL, capture_output=True, timeout=10,
+            env=environment, **flags)
+        if filters.returncode not in {0, 1}:
+            return {'exit_code': filters.returncode,
+                    'output': filters.stderr[:16000].decode('utf-8', errors='replace'), 'truncated': False}
+        names = {key.rsplit('.', 1)[0] for key in filters.stdout.decode('utf-8', errors='replace').splitlines()}
+        for name in names:
+            args.extend(['-c', name + '.clean=', '-c', name + '.process=', '-c', name + '.required=false'])
+        with tempfile.TemporaryFile() as output:
+            result = subprocess.run([*args, *commands[action]], cwd=self.workspace, stdin=subprocess.DEVNULL,
+                stdout=output, stderr=subprocess.STDOUT, timeout=10,
+                env=environment, **flags)
+            output.seek(0)
+            raw = output.read(32001)
+        return {'exit_code': result.returncode, 'output': raw[:32000].decode('utf-8', errors='replace'),
+                'truncated': len(raw) > 32000}
+
+    def _restrict_skill(self, item):
+        import re
+        allowed = item.metadata.get('allowed-tools')
+        if allowed:
+            names = allowed if isinstance(allowed, list) else re.split(r'[,\s]+', str(allowed))
+            if any('(' in name or ')' in name for name in names):
+                raise ValueError('Argument-specific allowed-tools поки не підтримуються.')
+            selected = {TOOL_ALIASES.get(name, name) for name in names}
+            self._turn_allowed = selected if self._turn_allowed is None else self._turn_allowed & selected
+        self._active_skills.add(item.name)
+
+    def run_skill(self, name: str, arguments: str = '', *, stream=False):
+        self._pending_skill = self.extensions.skill(name, explicit=True)
+        if self._pending_skill.metadata.get('user-invocable') is False:
+            self._pending_skill = None
+            raise PermissionError('Скіл не доступний як команда користувача.')
+        return self.handle_user_message(arguments or f'Виконай скіл {name}.', stream=stream)
+
+    def _available_tools(self):
+        tools = self.tool_registry + [t for group in self.integrations.tools.values() for t in group]
+        if self.plan_mode or self.analysis_only:
+            tools = [t for t in tools if t.name in READ_TOOLS]
+        if self.analysis_only:
+            tools = [t for t in tools if t.name != 'delegate']
+        if self._turn_allowed is not None:
+            tools = [t for t in tools if t.name in self._turn_allowed]
+        return tools
+
+    def _execute_tool(self, name, arguments):
+        tool = next((t for t in self._available_tools() if t.name == name), None)
+        if tool is None:
+            raise PermissionError(f'Інструмент недоступний у поточному режимі: {name}')
+        if not isinstance(arguments, dict):
+            raise ValueError('Аргументи інструмента мають бути об’єктом.')
+        properties = tool.parameters.get('properties', {})
+        allow_extra = tool.parameters.get('additionalProperties', name.startswith('mcp__'))
+        if allow_extra is False and set(arguments) - set(properties):
+            raise ValueError('Невідомі аргументи інструмента.')
+        hook = self.integrations.hooks('PreToolUse', name, arguments)
+        if hook:
+            return hook
+        result = tool.fn(**arguments)
+        hook = self.integrations.hooks('PostToolUse', name, arguments, result)
+        if hook:
+            return {**hook, 'tool_result': result, 'action_completed': True}
+        return result
 
     def last_response_streamed(self):
         return self._streamed
@@ -119,7 +217,10 @@ class CoderSession:
         return {'files': files, 'truncated': False}
 
     def read_file(self, path: str, start_line: int = 1, max_lines: int = 200):
-        content = self._text(self._path(path))
+        target = self._path(path)
+        if target.is_relative_to(self.workspace):
+            self._touched.add(target.relative_to(self.workspace).as_posix())
+        content = self._text(target)
         lines = content.splitlines()
         start = max(1, int(start_line)) - 1
         end = start + max(1, min(int(max_lines), 400))
@@ -171,8 +272,10 @@ class CoderSession:
             if temp_name and os.path.exists(temp_name):
                 os.unlink(temp_name)
         self._original_files.setdefault(target, original)
+        self._last_written[target] = self._hash(content)
 
     def _write(self, path: str, content: str, original: str | None):
+        self._require_edit()
         target = self._path(path)
         if len(content.encode('utf-8')) > MAX_BYTES:
             raise ValueError('Новий вміст завеликий (ліміт 512 KiB).')
@@ -204,6 +307,7 @@ class CoderSession:
         return original
 
     def create_directory(self, path: str):
+        self._require_edit()
         target = self._path(path)
         if target.is_dir():
             return {'created': False, 'path': str(target)}
@@ -246,6 +350,7 @@ class CoderSession:
         return prepared
 
     def _apply_changes(self, prepared: list, heading: str, new_root: Path | None = None):
+        self._require_edit()
         diffs = [self._diff(target, original, content) for _, target, original, content in prepared
                  if original != content]
         # An empty new file still counts as a creation even if unified_diff is empty.
@@ -312,13 +417,20 @@ class CoderSession:
         return True
 
     def _activate_workspace(self, target: Path, *, keep_changes: bool = False):
+        self.close()
         self.workspace = target
         self.full_access = False
+        self.plan_mode = False
+        self.tasks = []
+        self._touched.clear()
         if not keep_changes:
             self._original_files.clear()
+            self._last_written.clear()
         else:
             self._original_files = {path: before for path, before in self._original_files.items()
                                     if path.is_relative_to(target)}
+            self._last_written = {path: version for path, version in self._last_written.items()
+                                  if path.is_relative_to(target)}
         self.reset()
 
     def show_diff(self):
@@ -345,6 +457,7 @@ class CoderSession:
                     parts.append(f'--- {name} (локальні вказівки проєкту) ---\n{self._text(path)[:6000]}')
             except (OSError, ValueError):
                 continue
+        parts.append(self.extensions.context())
         return '\n'.join(parts)
 
     @staticmethod
@@ -355,6 +468,8 @@ class CoderSession:
                 details = 'отримано результат'
             elif result.get('error'):
                 details = 'помилка: ' + str(result['error'])
+                if result.get('action_completed'):
+                    details += '; дія інструмента вже виконана'
                 if result.get('files'):
                     details += f"; уже записано файлів: {len(result['files'])}"
             elif name == 'run_command':
@@ -378,7 +493,8 @@ class CoderSession:
             raise ValueError('old_text має точно й однозначно відповідати одному фрагменту файлу.')
         return self._write(path, original.replace(old_text, new_text, 1), original)
 
-    def run_command(self, command: str, shell: str = 'powershell', timeout: int = 60, cwd: str = '.'):
+    def run_command(self, command: str, shell: str = 'powershell', timeout: int = 60, cwd: str = '.', _input: str | None = None, _approval_context: str = ''):
+        self._require_edit()
         directory = self._path(cwd)
         if not directory.is_dir():
             raise ValueError('cwd має бути наявною папкою.')
@@ -396,7 +512,8 @@ class CoderSession:
             args = [executable, '-c', command]
         if not executable:
             raise ValueError('Обрана оболонка не встановлена.')
-        if not self.confirm(f'Виконати {shell} у {directory} (до {timeout} с):\n{command}\n'
+        if not self.confirm((_approval_context + '\n' if _approval_context else '') +
+                            f'Виконати {shell} у {directory} (до {timeout} с):\n{command}\n'
                             'Команда може змінювати файли поза проєктом та звертатися до мережі.\n'
                             'Вона виконується з правами поточного користувача ОС.'):
             return {'denied': True, 'executed': False}
@@ -405,8 +522,13 @@ class CoderSession:
         kwargs = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {'start_new_session': True}
         # Spool output to disk so a verbose build cannot fill process memory.
         with tempfile.TemporaryFile() as output:
-            process = subprocess.Popen(args, cwd=directory, stdin=subprocess.DEVNULL,
-                                       stdout=output, stderr=subprocess.STDOUT, **kwargs)
+            with tempfile.TemporaryFile() as hook_input:
+                if _input is not None:
+                    hook_input.write(_input.encode('utf-8'))
+                    hook_input.seek(0)
+                process = subprocess.Popen(args, cwd=directory,
+                    stdin=hook_input if _input is not None else subprocess.DEVNULL,
+                    stdout=output, stderr=subprocess.STDOUT, **kwargs)
             timed_out = False
             try:
                 process.wait(timeout=timeout)
@@ -440,24 +562,51 @@ class CoderSession:
             tool('list_files', 'List project files, excluding dependency and Git directories.', {'path': 'string'}, []),
             tool('read_file', 'Read UTF-8 text with line numbers.', {'path': 'string', 'start_line': 'integer', 'max_lines': 'integer'}, ['path']),
             tool('search_text', 'Find a literal string in project text files.', {'query': 'string', 'path': 'string'}, ['query']),
+            tool('git_info', 'Read-only Git status, diff against HEAD or recent log. No shell commands.', {'action': 'string'}, []),
             tool('write_file', 'Create or overwrite a UTF-8 file with diff approval. Existing files require expected_sha256 from read_file.', {'path': 'string', 'content': 'string', 'expected_sha256': 'string'}, ['path', 'content']),
             tool('replace_text', 'Replace one exact text fragment after diff approval.', {'path': 'string', 'old_text': 'string', 'new_text': 'string'}, ['path', 'old_text', 'new_text']),
             tool('create_directory', 'Create a directory and missing parents with approval.', {'path': 'string'}, ['path']),
             tool('edit_files', 'Create/edit up to 32 files in one approved diff. Existing files require expected_sha256 from read_file.', {'changes': files_schema}, ['changes']),
             tool('create_project', 'Create a NEW project directory with all files in one approval. Templates: empty/python/web; or supply custom files with relative paths. No commands or installs run.', {'path': 'string', 'template': 'string', 'files': files_schema}, ['path']),
             tool('run_command', 'Run tests, builds, Git or other shell commands after explicit user approval. Set cwd for a subproject. Not sandboxed.', {'command': 'string', 'shell': 'string', 'timeout': 'integer', 'cwd': 'string'}, ['command']),
+            Tool('load_skill', 'Load instructions for a discovered skill. Never grants tool permissions.',
+                 {'type': 'object', 'properties': {'name': {'type': 'string'}, 'arguments': {'type': 'string'}}, 'required': ['name']}, self.extensions.load_skill),
+            Tool('read_skill_file', 'Read a supporting file of an active skill.',
+                 {'type': 'object', 'properties': {'name': {'type': 'string'}, 'path': {'type': 'string'}}, 'required': ['name', 'path']}, self.extensions.read_skill_file),
+            Tool('remember', 'Save a project memory note after file approval.',
+                 {'type': 'object', 'properties': {'note': {'type': 'string'}}, 'required': ['note']}, self.extensions.remember),
+            Tool('update_tasks', 'Replace the in-memory task checklist; no file writes.',
+                 {'type': 'object', 'properties': {'items': {'type': 'array', 'items': {'type': 'object',
+                    'properties': {'title': {'type': 'string'}, 'status': {'type': 'string', 'enum': ['pending', 'in_progress', 'completed']}},
+                    'required': ['title', 'status']}}}, 'required': ['items']}, self.extensions.update_tasks),
+            Tool('delegate', 'Ask an isolated read-only analysis agent. Sequential, no shell or edits.',
+                 {'type': 'object', 'properties': {'agent': {'type': 'string'}, 'task': {'type': 'string'}}, 'required': ['agent', 'task']}, self.extensions.delegate),
         ]
 
     def handle_user_message(self, message: str, stream: bool = False):
+        try:
+            return self._run_turn(message, stream)
+        finally:
+            self._turn_allowed = None
+            self._active_skills.clear()
+
+    def _run_turn(self, message: str, stream: bool = False):
         self._streamed = False
+        self._active_skills.clear()
+        self._turn_allowed = None
+        skill = self._pending_skill
+        self._pending_skill = None
+        if skill:
+            self._restrict_skill(skill)
         self.history.append({'role': 'user', 'content': message})
-        schemas = [{'type': 'function', 'function': {'name': t.name, 'description': t.description,
-                    'parameters': t.parameters}} for t in self.tool_registry]
-        registry = {t.name: t for t in self.tool_registry}
         outcomes = []
-        system = (SYSTEM_PROMPT + f'\nРобочий проєкт: {self.workspace}\nДоступ поза проєктом: {self.full_access}'
-                  + '\n' + self._project_context())
         for _ in range(self.max_steps):
+            schemas = [{'type': 'function', 'function': {'name': t.name, 'description': t.description,
+                        'parameters': t.parameters}} for t in self._available_tools()]
+            system = (SYSTEM_PROMPT + f'\nРобочий проєкт: {self.workspace}\nДоступ поза проєктом: {self.full_access}'
+                      + '\n' + self._project_context())
+            if skill:
+                system += '\nАктивний скіл:\n' + skill.prompt(message)
             response = self.client.chat(messages=[{'role': 'system', 'content': system}, *self.history],
                                         tools=schemas, stream=stream)
             assistant = dict(response['assistant_message'])
@@ -490,7 +639,7 @@ class CoderSession:
                         arguments = function.get('arguments') or '{}'
                         if isinstance(arguments, str):
                             arguments = json.loads(arguments)
-                        result = registry[function['name']].fn(**arguments)
+                        result = self._execute_tool(function['name'], arguments)
                     except Exception as exc:
                         result = {'error': str(exc)}
                     results[index]['content'] = json.dumps(result, ensure_ascii=False)
@@ -538,6 +687,99 @@ def _workspace_command(session: CoderSession, message: str):
             print(json.dumps(result, ensure_ascii=False))
 
 
+def _extension_command(session: CoderSession, message: str, *, stream: bool):
+    verb, _, argument = message.strip().partition(' ')
+    verb = verb.lower()
+    ext = session.extensions
+    reply = None
+    if verb == '/skills':
+        skills = ext.skills()
+        print('\n'.join(f'/{s.name} — {s.description}' for s in skills.values()) or 'Скілів немає.')
+        if ext.skill_errors:
+            print('\n'.join(ext.skill_errors))
+    elif verb in {'/plan', '/mode'}:
+        mode = 'plan' if verb == '/plan' else argument.strip().lower()
+        if mode not in {'plan', 'edit'}:
+            raise ValueError('Використання: /plan [завдання] або /mode plan|edit')
+        session.plan_mode = mode == 'plan'
+        print('Режим: ' + mode)
+        if verb == '/plan' and argument.strip():
+            reply = session.handle_user_message(argument, stream=stream)
+    elif verb == '/tasks':
+        print(json.dumps(session.tasks, ensure_ascii=False, indent=2))
+    elif verb == '/memory':
+        path = session._path('.medfarl/memory.md')
+        print(session._text(path) if path.exists() else 'Пам’ять порожня. /remember текст — додати нотатку.')
+    elif verb == '/remember':
+        print(json.dumps(ext.remember(argument), ensure_ascii=False))
+    elif verb == '/init':
+        print(json.dumps(session.write_file('CLAUDE.md',
+            '# Project instructions\n\n## Working agreement\n'
+            '- Read existing files before changing them.\n- Preserve user changes.\n'
+            '- Verify changes with the project test suite; report commands and results.\n'
+            '- File writes and shell commands require user approval.\n'), ensure_ascii=False))
+    elif verb == '/sessions':
+        path = session._path('.medfarl/sessions')
+        print('\n'.join(p.stem for p in sorted(path.glob('*.json'))) or 'Збережених сесій немає.')
+    elif verb in {'/save', '/resume', '/checkpoint', '/rewind'}:
+        name = argument.strip() or 'last'
+        method = {'/save': ext.save_session, '/resume': ext.resume_session,
+                  '/checkpoint': ext.checkpoint, '/rewind': ext.rewind}[verb]
+        print(json.dumps(method(name), ensure_ascii=False, indent=2))
+    elif verb == '/compact':
+        print(ext.compact())
+    elif verb == '/agents':
+        print('\n'.join(ext.agents()))
+    elif verb == '/agent':
+        name, _, task = argument.strip().partition(' ')
+        if not task:
+            raise ValueError('Використання: /agent explorer|reviewer завдання')
+        print(ext.delegate(name, task)['result'])
+    elif verb == '/mcp':
+        action, _, name = argument.strip().partition(' ')
+        if action == 'connect':
+            print(json.dumps(session.integrations.connect(name.strip()), ensure_ascii=False))
+        elif action == 'disconnect':
+            session.integrations.disconnect(name.strip())
+            print('MCP відключено.')
+        elif not action or action == 'list':
+            print('\n'.join(f'{name}: ' + ('connected' if name in session.integrations.connections else 'disconnected')
+                            for name in session.integrations.configuration()) or 'MCP-серверів немає.')
+        else:
+            raise ValueError('/mcp [list|connect ім’я|disconnect ім’я]')
+    elif verb == '/hooks':
+        for relative in ('.claude/settings.json', '.medfarl/settings.json'):
+            path = session._path(relative)
+            if path.is_file():
+                print(relative + '\n' + json.dumps(json.loads(session._text(path)).get('hooks', {}), ensure_ascii=False, indent=2))
+        print('Hooks виконуються лише після підтвердження; у plan mode вимкнено.')
+    elif verb == '/permissions':
+        print('Файли: ' + ('усі дозволені ОС шляхи' if session.full_access else str(session.workspace)))
+        print('Запис/команди/MCP: з підтвердженням. Режим: ' + ('plan' if session.plan_mode else 'edit'))
+    elif verb == '/model':
+        if not argument.strip():
+            print(session.client.model)
+        else:
+            model = argument.strip()
+            if model not in session.client.list_models():
+                raise ValueError('Модель не встановлена в Ollama.')
+            session.client = LLMClient(session.client.base_url, model, session.client.timeout)
+            print('Модель: ' + model)
+    elif verb == '/doctor':
+        print(f'Проєкт: {session.workspace}\nМодель: {session.client.model}\nСкілів: {len(ext.skills())}\n'
+              f'MCP: {len(session.integrations.connections)}\nPython: {os.sys.version.split()[0]}')
+    elif verb == '/skill' or (verb[1:] in ext.skills() and verb not in {'/help', '/status', '/tools', '/reset', '/quit', '/new', '/open', '/project', '/diff', '/access'}):
+        name, _, arguments = argument.partition(' ') if verb == '/skill' else (verb[1:], '', argument)
+        reply = session.run_skill(name, arguments, stream=stream)
+    else:
+        return False
+    if reply is not None:
+        if not session.last_response_streamed():
+            print(reply)
+        print()
+    return True
+
+
 def run_coder_cli(session: CoderSession, *, stream: bool = True):
     from ui.cli import prompt_user
 
@@ -548,8 +790,18 @@ def run_coder_cli(session: CoderSession, *, stream: bool = True):
         message = prompt_user(prompt_label='\n  medfarl[coder]> ')
         command = message.strip().lower()
         if command in {'exit', 'quit', '/quit', '/q', '/exit'}:
+            session.close()
             return
         if not command:
+            continue
+        try:
+            if command.startswith('/') and _extension_command(session, message, stream=stream):
+                continue
+        except KeyboardInterrupt:
+            print('\nПерервано. Уже виконані дії збережено.')
+            continue
+        except Exception as exc:
+            print(f'[error] {exc}')
             continue
         if command == '/help':
             print('/help, /status, /tools, /reset, /quit\n'
@@ -558,6 +810,13 @@ def run_coder_cli(session: CoderSession, *, stream: bool = True):
                   '/project — поточна папка\n/diff — зміни файлових інструментів за цей сеанс\n'
                   '/access full — розширити доступ після підтвердження\n'
                   '/access project — обмежити файлові інструменти проєктом\n'
+                  '/skills, /skill ім’я [аргументи] — повторювані робочі процеси\n'
+                  '/plan [завдання], /mode edit — планування та виконання\n'
+                  '/tasks, /init, /memory, /remember текст — задачі й пам’ять\n'
+                  '/save [ім’я], /sessions, /resume [ім’я], /compact — сесії\n'
+                  '/checkpoint [ім’я], /rewind [ім’я] — файлові контрольні точки\n'
+                  '/agents, /agent ім’я завдання — окремий аналіз без змін\n'
+                  '/mcp, /hooks, /permissions, /model [ім’я], /doctor — налаштування\n'
                   'Приклад: «Створи Python-проєкт калькулятора з тестами».')
         elif command == '/project':
             print(f'Проєкт: {session.workspace}')
@@ -574,9 +833,10 @@ def run_coder_cli(session: CoderSession, *, stream: bool = True):
         elif command == '/status':
             print(f'Модель: {session.client.model}\nПроєкт: {session.workspace}\n'
                   f'Доступ до файлів: {"повний" if session.full_access else "проєкт"}\n'
+                  f'Режим: {"plan" if session.plan_mode else "edit"}\n'
                   'Запис і команди: завжди з підтвердженням. Команди не ізольовані.')
         elif command == '/tools':
-            print('\n'.join(t.name for t in session.tool_registry))
+            print('\n'.join(t.name for t in session._available_tools()))
         elif command in {'/access full', '/access project'}:
             session.set_full_access(command == '/access full')
             print('Доступ до файлів: ' + ('повний' if session.full_access else 'проєкт'))

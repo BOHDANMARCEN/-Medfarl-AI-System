@@ -1,5 +1,9 @@
 # Medfarl v0.2.0-alpha Release Notes
 
+> Historical release record. Current development behavior, including the separate coder,
+> model default and approval rules, is documented in [README](readme.md),
+> [TECHNICAL.md](TECHNICAL.md), and the Unreleased section of [CHANGELOG.md](CHANGELOG.md).
+
 Release date: 2026-03-23
 
 `v0.2.0-alpha` is the first public chat-first alpha of the new Medfarl architecture.

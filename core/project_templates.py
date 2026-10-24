@@ -1,15 +1,17 @@
 """Small local project starters; creating one never installs or runs software."""
 from __future__ import annotations
 
+PRIVATE_STATE_IGNORE = '.medfarl/sessions/\n.medfarl/checkpoints/\n'
+
 def project_files(template: str, name: str) -> dict[str, str]:
     if template == 'empty':
-        return {'README.md': f'# {name}\n\nНовий проєкт.\n', '.gitignore': '.env\n.venv/\n__pycache__/\n'}
+        return {'README.md': f'# {name}\n\nНовий проєкт.\n', '.gitignore': '.env\n.venv/\n__pycache__/\n' + PRIVATE_STATE_IGNORE}
     if template == 'python':
         return {
             'README.md': f'# {name}\n\nPython 3.10+. Додаткові залежності не потрібні.\n\n'
                          'Запуск: `python main.py --name Світ`\n\n'
                          'Перевірка: `python -m unittest discover -s tests`\n',
-            '.gitignore': '__pycache__/\n*.py[cod]\n.venv/\n.env\n',
+            '.gitignore': '__pycache__/\n*.py[cod]\n.venv/\n.env\n' + PRIVATE_STATE_IGNORE,
             'main.py': 'import argparse\n\n\ndef greet(name: str) -> str:\n'
                        '    return f"Привіт, {name}!"\n\n\ndef main() -> None:\n'
                        '    parser = argparse.ArgumentParser()\n'
@@ -27,7 +29,7 @@ def project_files(template: str, name: str) -> dict[str, str]:
             'README.md': f'# {name}\n\nВідкрийте `index.html` у браузері або запустіть\n'
                          '`python -m http.server 8000 --bind 127.0.0.1`\n'
                          'і відкрийте http://127.0.0.1:8000.\n',
-            '.gitignore': '.env\nnode_modules/\n',
+            '.gitignore': '.env\nnode_modules/\n' + PRIVATE_STATE_IGNORE,
             'index.html': '<!doctype html>\n<html lang="uk">\n<head>\n'
                           '  <meta charset="utf-8">\n'
                           '  <meta name="viewport" content="width=device-width,initial-scale=1">\n'

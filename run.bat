@@ -28,7 +28,7 @@ if errorlevel 1 (
 )
 
 echo [1/2] Checking dependencies...
-"%PYTHON%" -m pip show httpx >nul 2>&1
+"%PYTHON%" -c "import httpx, psutil, yaml" >nul 2>&1
 if errorlevel 1 (
     echo [INFO] Installing dependencies...
     "%PYTHON%" -m pip install -r requirements.txt

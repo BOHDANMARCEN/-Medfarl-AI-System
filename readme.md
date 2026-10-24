@@ -1,49 +1,87 @@
 # Medfarl AI System
 
-**PC Doctor powered by a local LLM**
+Local AI chat, a project coding agent, and PC diagnostics in one terminal application.
 
-> Deep local diagnostics. Zero cloud. All analysis stays on your machine.
+Default model: **`tripolskypetr/qwen3.5-uncensored-aggressive:9b`**, served by Ollama
+at `http://localhost:11434`. Chat streams by default. The coder creates and edits
+files, runs approved commands, and supports skills, plans, project memory, saved
+sessions, checkpoints, analysis agents, hooks and MCP tools.
 
-Current prerelease: `v0.2.0-alpha` — see [CHANGELOG.md](CHANGELOG.md) for release notes.
+Development additions since the documented `v0.2.0-alpha` are listed in
+[CHANGELOG.md](CHANGELOG.md). They have not been assigned a new release tag.
 
-Medfarl is a chat-first terminal diagnostic assistant that runs a local LLM as an
-agent with controlled tool access to your system. Speak naturally — it decides whether
-to answer directly, ask one clarifying question, use tools, or switch into guided/manual
-assistance when an action is blocked. Inspects hardware, processes, packages, logs, and
-services — then explains findings in plain language. Can also run maintenance actions
-through guarded tools with explicit approval.
+## Documentation
 
-**Default mode:** Run `run.bat` for a direct, interactive streaming chat with
-`tripolskypetr/qwen3.5-uncensored-aggressive:9b`.
-Ollama starts automatically if needed and the model is loaded before the prompt.
-Conversation history is kept until `/reset` or exit. Use `/quit` to leave.
-The diagnostic assistant described below is available through `run.bat --agent`;
-that mode requires tool support. Override the model with `--model` or `MEDFARL_MODEL`.
+- [Українська інструкція запуску](ІНСТРУКЦІЯ_ЗАПУСКУ.md)
+- [Technical architecture, contracts and configuration](TECHNICAL.md)
+- [Diagnostic tools and maintenance approvals](DIAGNOSTICS.md)
+- [Coding commands and Claude Code compatibility](CLAUDE_COMPATIBILITY.md)
+- [Streaming behavior](STREAMING_README.md)
+- [Implementation and verification summary](ЩО_ЗРОБЛЕНО.md)
+- [Historical alpha release notes](ALPHA_RELEASE_NOTES.md)
 
-### Interactive coder mode
+## Choose a mode
 
-Run `run-coder.bat` or choose **19** in `Medfarl_Menu.bat` to work on code through
-an interactive terminal conversation. This is Medfarl's local coding workflow,
-using Ollama; it does not install or invoke Gemini CLI.
+| Mode | Start | Behavior |
+| --- | --- | --- |
+| Direct chat | `python main.py` or `run.bat` | Conversation; no file or diagnostic tools |
+| Coder | `python main.py --coder` or `run-coder.bat` | Project files, edits, tests and coding workflows; action approvals stay enabled |
+| Plan | `python main.py --coder --plan` | Read-only research and planning; writes, general shell, hooks and MCP calls blocked |
+| Diagnostics | `python main.py --agent` or `run.bat --agent` | System inspection and guarded maintenance |
+| Diagnostic unsafe | `run-unsafe.bat` | Legacy diagnostic operator mode; expands roots and disables its action gates |
+
+Enter `/coder` or `/coder "E:\My Project"` inside direct chat to open the coder;
+`/quit` returns to that chat. A directly launched coder exits on `/quit`.
+The Windows menu offers diagnostics at **18** and coder mode at **19**.
+
+## Install and run
+
+Requirements: Python 3.10+, Git for Git tools, Ollama, and an installed Ollama
+model. Coder/diagnostic modes require tool calling; direct chat does not.
+Hardware requirements depend on the model and context size.
 
 ```powershell
-.\run-coder.bat
-.\run-coder.bat --workspace "E:\My Project"
-.\run-coder.bat --workspace "E:\My Project" --model "your-installed-tool-model"
-# Equivalent without the launcher:
-python main.py --coder --workspace "E:\My Project"
+git clone https://github.com/BOHDANMARCEN/-Medfarl-AI-System.git
+cd .\-Medfarl-AI-System
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+ollama pull tripolskypetr/qwen3.5-uncensored-aggressive:9b
+.\run.bat
 ```
 
-You can also enter `/coder` or `/coder "E:\My Project"` from the normal chat.
-`/quit` returns to that chat. A missing `--workspace` directory can be created after
-confirmation before the coder starts.
+Launchers use `.venv\Scripts\python.exe` when present, otherwise `python`. They
+check `httpx`, `psutil` and `yaml` and install requirements if those imports fail.
+Startup can launch `ollama serve` and preload the model. **Models are not pulled
+automatically.**
 
-The coder can list files, search text, read files with line numbers, create directories,
-create or rewrite files, replace an exact text fragment, and run tests/builds through
-PowerShell, CMD or sh. Existing files require a hash from `read_file` before a full
-rewrite; files changed during the approval prompt are not overwritten.
+For Linux/macOS, use the Python entry point:
 
-Create a project directly in the coder:
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python main.py --coder --workspace /path/to/project
+```
+
+Windows is the primary verification environment. Shells, sensors, antivirus adapters
+and process behavior depend on the OS; Windows launchers are not cross-platform scripts.
+
+| Dependency | Purpose |
+| --- | --- |
+| `httpx>=0.27.0` | Ollama requests, completion streams and MCP HTTP |
+| `psutil>=5.9.0` | Telemetry and process inspection |
+| `PyYAML>=6.0` | Skill and rule frontmatter |
+| `pynvml>=11.5.0` | Optional NVIDIA telemetry; included in requirements |
+
+GPU telemetry needs a compatible NVIDIA GPU/driver. Chat and coding do not depend
+on GPU telemetry. Antivirus operations need an available supported provider.
+
+## Create and edit projects
+
+```powershell
+.\run-coder.bat --workspace "E:\My Project"
+```
+
+A missing workspace can be created after confirmation. Inside the coder:
 
 ```text
 /new python "my calculator"
@@ -54,1213 +92,156 @@ Create a project directly in the coder:
 /diff
 ```
 
-`/new` creates and opens a new directory after showing every file and its diff in
-one confirmation. `python` includes an executable CLI and unittest tests; `web`
-includes HTML, CSS and JavaScript; `empty` includes a README and `.gitignore`.
-No packages are installed and no commands run during project creation.
-Relative paths use the current project; outside paths need `/access full` first.
-`/open` selects an existing directory after confirmation, clears conversation history,
-and restricts file access to that new directory.
-
-Natural-language tasks can create arbitrary project structures through
-`create_project(path, files=[{path, content}, ...])` and edit multiple files through
-`edit_files(changes=[{path, content, expected_sha256}, ...])`. A batch supports up
-to 32 files, 512 KiB per file and 2 MiB total. All paths and existing file hashes
-are checked before approval and rechecked before writing. Each file is written
-atomically; if an I/O error interrupts a batch, already written files are reported
-and retained. Existing project directories are never overwritten by `create_project`.
-`run_command` accepts `cwd` for testing a created subproject.
-
-`/diff` shows changes made by file tools during the current project session; it does
-not track edits made by shell commands. `/reset` preserves that change list.
-Root-level `AGENTS.md`, `QWEN.md` and `GEMINI.md` are loaded as local coding guidance;
-nested guidance can be read by the model as it explores files.
-
-It sends tool results back to the model and continues until it responds or reaches
-20 steps. Streaming is enabled; use `--no-stream` to disable it. A model supporting
-tool calling is required. `--model` takes precedence over `MEDFARL_CODER_MODEL`,
-which defaults to the normal configured chat model. Models are not downloaded automatically.
-
-File tools are restricted to the selected project by default. Writes show a diff
-and require `y`, `yes` or `так`; Enter or EOF denies the operation. Every shell command
-shows its working directory, exact command and timeout and requires confirmation.
-**Shell commands are not sandboxed**: an approved command has the current OS user's
-file and network access, even in project mode. They do not elevate administrator rights.
-Refusing an action stops the current task; already completed changes remain.
-
-Use `/access full` to request file access outside the project with a separate
-confirmation, and `/access project` to revoke it. Coder mode retains action approvals
-even with `--unsafe-full-access`; this flag asks to expand access at startup.
-The legacy diagnostic unsafe mode is separate.
-
-Commands: `/help`, `/status`, `/tools`, `/new`, `/open`, `/project`, `/diff`, `/reset`,
-`/quit`, `/access full`, `/access project`. `/reset` clears conversation history,
-not files or permissions.
-History is held in memory for the session; long sessions may require `/reset`.
-Example task: “Read the project instructions, fix the parser bug, and run its tests.”
-
----
-
-## Table of contents
-
-- [Why Medfarl](#why-medfarl)
-- [What Works Now](#what-works-now)
-- [System Requirements](#system-requirements)
-- [Dependencies](#dependencies)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Streaming Mode](#streaming-mode)
-- [Chat-first Behavior](#chat-first-behavior)
-- [How it Works](#how-it-works)
-- [Configuration](#configuration)
-- [Available Models](#available-models)
-- [Launch Scripts](#launch-scripts)
-- [CLI Arguments](#cli-arguments)
-- [Slash Commands](#slash-commands)
-- [Maintenance Mode](#maintenance-mode)
-- [Tool Reference](#tool-reference)
-- [Project Structure](#project-structure)
-- [Architecture](#architecture)
-- [Safety Model](#safety-model)
-- [Stability Checks](#stability-checks)
-- [Supported Platforms](#supported-platforms)
-- [Known Limitations](#known-limitations)
-- [Roadmap](#roadmap)
-- [Extending Medfarl](#extending-medfarl)
-
----
-
-## Why Medfarl
-
-Most "AI system assistants" either phone home, hallucinate tool results, or give the LLM
-unrestricted shell access. Medfarl is built around three different priorities:
-
-**Local-first.** Everything runs on your machine. The LLM runs via Ollama (or any
-OpenAI-compatible local backend). No data leaves the host.
-
-**Controlled tool access.** The agent can only call explicitly registered tools. Shell
-execution is limited to a hardcoded allowlist of safe diagnostic commands. No arbitrary
-`subprocess.run(user_input)`. Mutating actions are available only through dedicated
-maintenance tools with approval prompts.
-
-**Real data before conclusions.** The system prompt instructs the model to always call
-`get_system_snapshot` before diagnosing any unknown issue. It is not allowed to invent
-tool results or guess before reading actual system state.
-
----
-
-## What Works Now
-
-Current alpha is strongest in four areas:
-
-- **chat-first routing** — every turn is handled as a conversational request first, not as a strict command.
-- **tool-aware diagnostics** — the agent decides when to answer directly and when to use the existing tool loop.
-- **guided/manual mode** — blocked actions become practical manual guidance instead of cold refusal.
-- **interactive streaming** — responses appear token-by-token in real-time (like Gemini CLI).
-- **auditability** — action IDs, JSONL audit trail, single pending-action policy, smoke scripts, and targeted unit tests.
-
-This keeps Medfarl useful as a local PC Doctor alpha while making the UX feel like a
-normal assistant instead of a command parser.
-
----
-
-## System Requirements
-
-### Hardware
-
-| Component | Minimum | Recommended |
-|-----------|---------|-------------|
-| RAM | 8 GB | 16 GB |
-| Disk | 10 GB free | 20 GB free (for models) |
-| GPU | None (CPU-only) | NVIDIA GPU (for hardware acceleration via Ollama) |
-
-### Software
-
-| Component | Version | Notes |
-|-----------|---------|-------|
-| Python | 3.10+ | Required |
-| Ollama | Latest | https://ollama.ai |
-| Windows | 10/11 | Primary platform |
-| Linux | Ubuntu 20.04+ | Supported |
-| macOS | 12+ | Supported |
-
-### Model Requirements
-
-You need at least **one Ollama model with tool-calling support**:
-
-| Model | Size | RAM needed | Speed | Quality |
-|-------|------|------------|-------|---------|
-| `qwen3.5:4b` | 3.4 GB | 6 GB | ⚡⚡⚡ Fast | ⭐⭐⭐ Good |
-| `qwen3.5:9b` | 6.6 GB | 10 GB | ⚡⚡ Medium | ⭐⭐⭐⭐ Better |
-| `llama3.2:3b` | 2.0 GB | 4 GB | ⚡⚡⚡⚡ Very Fast | ⭐⭐ Basic |
-| `gemma-abliterated` | 7.3 GB | 10 GB | ⚡⚡ Medium | ⭐⭐⭐⭐ Good |
-| `gpt-oss-20b` | 11 GB | 16 GB | ⚡ Slow | ⭐⭐⭐⭐⭐ Best |
-| `huihui_ai/qwen2.5-1m-abliterated:14b` | 9.0 GB | 14 GB | ⚡⚡ Medium | ⭐⭐⭐⭐ Great |
-| `huihui_ai/qwen3-abliterated:14b` | 9.0 GB | 14 GB | ⚡⚡ Medium | ⭐⭐⭐⭐ Great |
-
-**Default chat model:** `tripolskypetr/qwen3.5-uncensored-aggressive:9b`. Diagnostic agent mode requires a model with tool support.
-
----
-
-## Dependencies
-
-### Python Packages
-
-All dependencies are listed in `requirements.txt`:
-
-```
-psutil>=5.9.0       # System monitoring (CPU, RAM, disk, network, processes)
-httpx>=0.27.0       # HTTP client for Ollama API calls
-pynvml>=11.5.0      # Optional — NVIDIA GPU telemetry support
-```
-
-### What Each Dependency Does
-
-| Package | Required | Purpose |
-|---------|----------|---------|
-| `psutil` | ✅ Yes | Cross-platform system monitoring: CPU usage, memory, disk I/O, network, temperatures |
-| `httpx` | ✅ Yes | Synchronous HTTP client for Ollama `/v1/chat/completions` and `/api/tags` endpoints |
-| `pynvml` | ⚠️ Optional | NVIDIA Management Library — GPU utilization, memory, temperature via `nvidia-ml-py` |
-
-### Install Dependencies
-
-```bash
-# Automatic (recommended)
-pip install -r requirements.txt
-
-# Without optional GPU support
-pip install psutil>=5.9.0 httpx>=0.27.0
-```
-
-### External Dependencies
-
-| Component | Required | Purpose |
-|-----------|----------|---------|
-| **Ollama** | ✅ Yes | Local LLM runtime server |
-| **Model** | ✅ Yes | At least one tool-calling capable model |
-| **Windows Defender** | ⚠️ Optional | Antivirus scanning (auto-detected) |
-| **ClamAV** | ⚠️ Optional | Third-party antivirus scanning |
-| **pip** | ⚠️ Optional | Package management via maintenance tools |
-
----
-
-## Installation
-
-### Step 1: Install Ollama
-
-**Windows:**
-```bash
-# Download and install from https://ollama.ai
-# Or use winget:
-winget install Ollama.Ollama
-```
-
-**Linux:**
-```bash
-curl -fsSL https://ollama.ai/install.sh | sh
-```
-
-**macOS:**
-```bash
-brew install ollama
-```
-
-### Step 2: Pull a Model
-
-```bash
-# Fast fallback model
-ollama pull qwen3.5:4b
-
-# Default recommended model
-ollama pull tripolskypetr/qwen3.5-uncensored-aggressive:9b
-
-# Lightweight model for low-RAM systems
-ollama pull llama3.2:3b
-```
-
-### Step 3: Set Up Medfarl
-
-```bash
-# Clone or copy the project
-cd medfarl-ai-system
-
-# Create virtual environment (recommended)
-python -m venv .venv
-
-# Activate virtual environment
-# Windows:
-.venv\Scripts\activate
-# Linux/macOS:
-source .venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
-### Step 4: Verify Installation
-
-```bash
-# Check Ollama connectivity and model availability
-python main.py --healthcheck
-
-# List installed models
-python main.py --list-models
-```
-
-Expected output:
-```
-[ok] Ollama reachable at http://localhost:11434
-[ok] Model available: tripolskypetr/qwen3.5-uncensored-aggressive:9b
-```
-
----
-
-## Quick Start
-
-### Using Batch Scripts (Windows)
-
-**Easiest — Interactive Menu:**
-```bat
-Medfarl_Menu.bat
-```
-
-**Normal Launch:**
-```bat
-run.bat
-```
-
-This now starts the default interactive Gemini-CLI-like mode:
-- streaming enabled
-- model `tripolskypetr/qwen3.5-uncensored-aggressive:9b`
-- conversation history until `/reset` or exit
-- use `--agent` for diagnostic tools
-
-**Fast Launch (skip Ollama check):**
-```bat
-run-quick.bat
-```
-
-**Streaming Mode (like Gemini CLI):**
-```bat
-run-streaming.bat
-```
-
-**Full Access Mode:**
-```bat
-run-unsafe.bat
-```
-
-### Using Command Line
-
-```bash
-# Interactive streaming session with the default Qwen 9B model
-python main.py
-
-# Streaming is already enabled by default
-python main.py --stream
-
-# Disable streaming and print full replies only at the end
-python main.py --no-stream
-
-# Specific model
-python main.py --model qwen3.5:9b
-
-# Streaming with specific model
-python main.py --stream --model qwen3.5:9b
-
-# Increase timeout for slower/larger models
-python main.py --timeout 240 --model gpt-oss-20b
-
-# Skip healthcheck (when Ollama is not yet running)
-python main.py --skip-healthcheck
-
-# Full access mode (unrestricted filesystem + shell)
-python main.py --unsafe-full-access --skip-healthcheck
-
-# Check system health
-python main.py --healthcheck
-
-# List available models
-python main.py --list-models
-
-# Run benchmark across multiple models
-python main.py --benchmark-models qwen3.5:4b qwen3.5:9b llama3.2:3b
-```
-
----
-
-## Streaming Mode
-
-Streaming is now the default interactive behavior. Responses appear token-by-token in
-real time, just like Gemini CLI or ChatGPT.
-
-### Before (Normal Mode):
-```
-medfarl> що жере RAM
-[waiting 10-30 seconds...]
-[entire response appears at once]
-```
-
-### After (Streaming Mode):
-```
-medfarl> що жере RAM
-Зараз найбільше RAM споживають: ← appears immediately!
-- browser.exe: 2048 MB ← streams in real-time
-- editor.exe: 512 MB
-...
-```
-
-### Features
-
-✅ **Instant feedback** — see text as it's generated  
-✅ **Better UX** — feels like talking to a person  
-✅ **No waiting** — especially useful for long responses  
-✅ **Tool indicators** — see `🔧 Using tool: ...` during execution  
-✅ **Multi-language** — works with Ukrainian, Russian, English  
-
-### Enable Streaming
-
-```bash
-# Command line (already default)
-python main.py --stream
-python main.py --stream --model qwen3.5:9b
-
-# Explicitly disable it if needed
-python main.py --no-stream
-
-# Batch file
-run-streaming.bat
-
-# Menu (option 16)
-Medfarl_Menu.bat
-```
-
-### How It Works
-
-1. **HTTP Streaming** → Uses `httpx.stream()` instead of `httpx.post()`
-2. **Server-Sent Events** → Reads `data:` lines from Ollama response stream
-3. **Incremental Print** → Each token printed immediately with `flush=True`
-4. **Tool Call Detection** → Parses JSON chunks for tool calls, shows indicators
-
----
-
-## Chat-first Behavior
-
-Each user turn passes through an explicit conversational router inside the agent:
-
-```
-DIRECT_RESPONSE
-CLARIFICATION
-TOOL_USE
-GUIDED_MANUAL_MODE
-```
-
-What that means in practice:
-
-- **Natural language is the default UX.** Inputs like `привіт`, `подивись, чому комп гальмує`, `що жере RAM`, or `ось папка з ClamAV, як це запустити` are valid first-class prompts.
-- **Fast-path intent normalization** still exists for short, common diagnostics such as `діагностика ПК`, `процеси`, `мережа`, `диск`, and `логи`, but it is only an optimization.
-- **Ambiguous fragments** like `воно не працює` or a bare path no longer dead-end the session; Medfarl either asks one short follow-up question or switches into guided/manual help.
-- **Language is preserved** turn by turn for Ukrainian, Russian, and English replies.
-
-### Realistic Examples
+`/new` previews every file, asks once, creates the project and selects it as the
+workspace. Templates contain a Python CLI with unittest tests, a static HTML/CSS/JS
+site, or a README and `.gitignore`. Creation does not install packages or run code.
+Natural-language tasks can create arbitrary structures:
 
 ```text
-medfarl> привіт
-Привіт! Що саме перевірити: загальний стан системи, процеси, диски, мережу чи логи?
-
-medfarl> подивись, чому комп гальмує
-Добре, перевірю CPU, RAM, диски та найважчі процеси.
-... tool-aware diagnostic reply ...
-
-medfarl> C:\clamav-1.5.1.win.x64
-I can see a Windows path ... The safest next step is to open that folder manually
-and check for clamscan.exe or freshclam.exe.
-
-medfarl> там антивірус його треба запустити
-Бачу, ти хочеш запустити програму з цього шляху. Я не можу напряму запускати .exe
-поза дозволеними шляхами, але можу підказати, який файл шукати вручну:
-clamscan.exe або freshclam.exe.
+Create a calculator in calc with source files, a README and tests, then verify it.
+Read parser.py, fix the parsing bug and run the relevant tests.
 ```
 
----
+The coder lists/searches/reads files, creates directories, makes exact replacements,
+and applies batches of **1–32 files**, **512 KiB per file**, **2 MiB per batch**.
+Full rewrites require the current SHA-256 from `read_file`; approval-time conflicts
+are checked before writing. Each file write is atomic. A multi-file batch can
+retain earlier writes on an I/O error and reports completed paths.
 
-## How it Works
+## Coding workflows
 
-At startup Medfarl collects a system snapshot (CPU, RAM, disks, temperatures, running
-processes, GPU if available, package manager state) and injects it into the conversation
-as a synthetic bootstrap tool result. The LLM receives this context before the first user
-message — so it can answer basic questions immediately without making extra tool calls.
+| Commands | Purpose |
+| --- | --- |
+| `/help`, `/status`, `/tools`, `/project` | Commands, model/mode, permitted tools and workspace |
+| `/skills`, `/skill name arguments` | Discover and run a reusable workflow |
+| `/review`, `/debug`, `/test`, `/refactor`, `/docs` | Bundled coding workflows |
+| `/commit`, `/implementation-plan` | Explicit commit preparation or read-only planning |
+| `/plan [task]`, `/mode edit`, `/tasks` | Research without writes, approved execution, checklist |
+| `/init`, `/remember text`, `/memory` | Project instructions and approved notes |
+| `/save work`, `/sessions`, `/resume work`, `/compact` | Save, list, restore and summarize conversations |
+| `/checkpoint before`, `/rewind before` | Track and restore file-tool changes with conflict checks |
+| `/agents`, `/agent reviewer task` | Isolated, sequential, read-only analysis |
+| `/mcp`, `/mcp connect name`, `/mcp disconnect name` | Explicit external tool connections |
+| `/hooks`, `/permissions`, `/model [name]`, `/doctor` | Configuration and runtime inspection |
+| `/access full`, `/access project` | Expand file access after confirmation, or restrict it |
+| `/reset`, `/quit` | Clear conversation history, or leave the coder |
 
-### Two-Stage Processing
+Skills load from bundled `skills/`, personal `.claude/skills`/`.medfarl/skills`,
+and project `.claude/commands`, `.claude/skills` and `.medfarl/skills`.
+`allowed-tools` can only restrict a turn; skills never grant extra rights.
 
-```
-user message
-    → conversational planner
-        → direct response
-        → clarification
-        → guided/manual mode
-        → tool use
-```
+Root `AGENTS.md`, `QWEN.md`, `GEMINI.md`, `CLAUDE.md`, `.claude/CLAUDE.md` and
+project memory provide guidance. Nested CLAUDE files and matching rules load after
+relevant files are read. Notes live in `.medfarl/memory.md`; sessions/checkpoints
+live under `.medfarl/sessions/` and `.medfarl/checkpoints/`. Those state directories
+are Git-ignored in this repository and starter templates; add them to existing projects.
 
-If the planner selects `TOOL_USE`, Medfarl enters the tool-calling loop:
+Resume restores history, tasks and tracked file baselines, retains the currently
+selected model and revokes full access. Rewind covers file-tool edits, not a whole
+disk, shell changes or Git state; external changes block it. `/reset` preserves
+files, the change list and access mode. `/open` selects another project and clears
+its conversation.
 
-```
-user message
-    → LLM decides which tool to call
-        → tool executes locally, result appended to context
-            → LLM continues reasoning
-                → repeat until final text answer
-```
+[CLAUDE_COMPATIBILITY.md](CLAUDE_COMPATIBILITY.md) documents formats, examples and
+boundaries. Compatibility is partial: OAuth, IDE/LSP, cloud services, agent teams
+and full Claude plugin semantics are outside the current implementation.
 
-The loop runs for at most `max_tool_steps` iterations (default 8) as a safety cap.
-Conversation history is preserved across turns within a session.
+## Approvals and data access
 
-For mutating tools (run program, install/uninstall pip packages, edit files), Medfarl
-creates a pending action plan and waits for `approve` or `cancel` instead of executing
-immediately.
+Coder writes show a diff; commands show the shell, cwd and timeout. `y`, `yes` or
+`так` approves; Enter/EOF denies. Denial stops the task and preserves completed
+actions. MCP connections/calls, hook commands, session saves/restores and checkpoint
+restores have explicit approvals. Plan mode blocks state saves as well as code writes.
 
-Every pending action gets an **Action ID**. You can confirm or cancel a specific action
-using that ID, and inspect current pending state with `pending`.
+File tools are workspace-confined by default. **Approved shell commands and MCP
+server processes are not sandboxed**: they use the OS user's file/network rights.
+The application does not automatically grant administrator privileges.
 
----
+Coder `--unsafe-full-access` still asks to expand file access and retains approvals.
+In **legacy diagnostic unsafe mode**, the flag or `MEDFARL_UNSAFE_FULL_ACCESS=1`
+expands roots and disables diagnostic action gates. Diagnostic confirmation settings
+do not disable coder approvals.
 
-## Configuration
+Default localhost Ollama requests stay local. A remote backend, approved network
+command or remote MCP server can transmit data. Saved sessions may contain
+conversation/file content and are not encrypted. The diagnostic JSONL audit covers
+its own action workflow, not every coder operation.
 
-All settings live in `config.py` as a `Settings` dataclass. Every field can be
-overridden with an environment variable.
+## Configuration and CLI
 
-### Environment Variables
+Chat/diagnostic model priority: `--model` > `MEDFARL_MODEL` > built-in default.
+Coder priority: `--model` > `MEDFARL_CODER_MODEL` > configured chat model.
 
-| Variable | Default | Description |
-|---|---|---|
-| `MEDFARL_LLM_URL` | `http://localhost:11434` | Ollama or any OpenAI-compatible endpoint |
-| `MEDFARL_MODEL` | `tripolskypetr/qwen3.5-uncensored-aggressive:9b` | Model name as Ollama knows it |
-| `MEDFARL_TIMEOUT` | `120` | HTTP timeout in seconds for LLM calls |
-| `MEDFARL_KEEP_ALIVE` | `30m` | How long Ollama keeps the loaded model in memory |
-| `MEDFARL_AUTOSTART_OLLAMA` | `1` | Start `ollama serve` automatically when the API is unreachable |
-| `MEDFARL_WARMUP` | `1` | Preload the selected model before the first prompt |
-| `MEDFARL_CHAT_SYSTEM_PROMPT` | built-in Ukrainian prompt | System prompt for direct chat mode |
-| `MEDFARL_CHAT_REASONING_EFFORT` | `none` | Reasoning level for chat; empty string leaves the model default |
-| `MEDFARL_MAX_TOOL_STEPS` | `8` | Maximum tool call iterations per user turn |
-| `MEDFARL_ALLOWED_READ_ROOTS` | current workspace | `os.pathsep`-separated roots for file read access |
-| `MEDFARL_ALLOWED_EDIT_ROOTS` | current workspace | Roots where text files/directories can be created or edited |
-| `MEDFARL_ALLOWED_EXEC_ROOTS` | current workspace | Roots where `run_program` is allowed to execute files |
-| `MEDFARL_CONFIRM_EXEC` | `1` | Require approval before `run_program` |
-| `MEDFARL_CONFIRM_PACKAGE_CHANGES` | `1` | Require approval before pip install/uninstall |
-| `MEDFARL_CONFIRM_FILE_EDITS` | `1` | Require approval before create/write/edit file actions |
-| `MEDFARL_CONFIRM_DELETE` | `1` | Reserved for delete actions (future cleanup stage) |
-| `MEDFARL_ENABLE_ACTION_LOG` | `1` | Enable JSONL audit log for mutating action lifecycle |
-| `MEDFARL_ACTION_LOG_PATH` | `./medfarl_actions.log` | Path to the action audit log file |
-| `MEDFARL_JUNK_QUARANTINE_DIR` | `./junk_quarantine` | Default destination for moved junk files |
-
-### Using a Different Backend
-
-Point `MEDFARL_LLM_URL` at any OpenAI-compatible `/v1/chat/completions` endpoint:
-
-```bash
-# LM Studio (default port)
-MEDFARL_LLM_URL=http://localhost:1234 python main.py
-
-# vLLM
-MEDFARL_LLM_URL=http://localhost:8000 MEDFARL_MODEL=mistral python main.py
-
-# Jan
-MEDFARL_LLM_URL=http://localhost:1337 python main.py
+```powershell
+$env:MEDFARL_CODER_MODEL = "your-installed-tool-model"
+.\run-coder.bat --timeout 240
+python main.py --list-models
+python main.py --no-warmup --healthcheck
+python main.py --coder --no-warmup --healthcheck
+python main.py --coder --plan -p "Explain the project"
+python main.py --coder --resume work
+python main.py --no-stream
 ```
 
-### Config Properties
+`--prompt`/`-p`, `--plan` and `--resume` imply coder mode and reject `--agent`.
+One-shot execution prints text and retains approvals; noninteractive EOF denies
+actions. It does not enable unattended execution.
 
-```python
-# Read-only properties
-settings.llm_url         # → http://localhost:11434
-settings.llm_base_url    # → same as llm_url
-settings.model           # → tripolskypetr/qwen3.5-uncensored-aggressive:9b
-settings.llm_model       # → same as model
-settings.timeout         # → 120
-settings.llm_timeout     # → same as timeout
-settings.max_tool_steps  # → 8
-settings.max_tool_calls_per_turn  # → same as max_tool_steps
+| Setting | Default | Scope |
+| --- | --- | --- |
+| `MEDFARL_LLM_URL` | `http://localhost:11434` | Backend root, without a trailing `/v1` |
+| `MEDFARL_MODEL` | `tripolskypetr/qwen3.5-uncensored-aggressive:9b` | Chat/diagnostics; coder fallback |
+| `MEDFARL_CODER_MODEL` | Configured chat model | Coder override |
+| `MEDFARL_TIMEOUT` | `120` seconds | Model request timeout |
+| `MEDFARL_KEEP_ALIVE` | `30m` | Ollama preload request |
+| `MEDFARL_AUTOSTART_OLLAMA` | `1` | Allow startup to launch Ollama |
+| `MEDFARL_WARMUP` | `1` | Preload unless `--no-warmup` |
+| `MEDFARL_CHAT_SYSTEM_PROMPT` | Built-in prompt | Direct chat only |
+| `MEDFARL_CHAT_REASONING_EFFORT` | `none` | Direct chat only |
 
-# Lists
-settings.allowed_read_roots    # Paths for file reading
-settings.allowed_edit_roots    # Paths for file creation/editing
-settings.allowed_exec_roots    # Paths for program execution
+`--skip-healthcheck` skips preflight, not preload; `--no-warmup` controls preload.
+Non-Ollama backends need compatible endpoints and may require both flags. `/model`,
+listing and preflight use Ollama APIs. See [TECHNICAL.md](TECHNICAL.md) for all
+diagnostic root/confirmation/audit settings and `python main.py --help` for flags.
 
-# Enable unsafe mode programmatically
-settings.enable_unsafe_full_access()
+| Windows launcher | Behavior |
+| --- | --- |
+| `run.bat` | Dependency check and streaming chat |
+| `run-coder.bat` | Coder, forwarding additional flags |
+| `run-streaming.bat` | Explicit streaming; respects model overrides |
+| `run-quick.bat` | Skips preflight; retains preload |
+| `run-unsafe.bat` | Legacy diagnostic unsafe mode |
+| `Medfarl_Menu.bat` | Model/mode menu |
+
+## Diagnostics and maintenance
+
+Start `run.bat --agent` for snapshots, CPU/RAM/disks/processes/network, package
+inspection, supported logs and available NVIDIA sensors. Guarded maintenance
+includes approved file/program/package actions, junk quarantine and supported
+antivirus adapters. Availability depends on OS, hardware and installed tools.
+
+Diagnostic approval commands: `pending`, `approve <id>`, `cancel <id>`,
+`history actions`, `last action`. One mutation may be pending at a time.
+Diagnostic roots default to the process cwd and are separate from the coder
+workspace. Multi-line `/shell powershell` and `/shell cmd` belong to diagnostic unsafe mode.
+
+## Verification and development
+
+```powershell
+python -m unittest discover -s tests -v
 ```
 
----
-
-## Available Models
-
-### Installed Models (Current System)
-
-Run `ollama list` to see what's available:
-
-```
-NAME                                    ID              SIZE      MODIFIED
-qwen3.5:9b                              6488c96fa5fa    6.6 GB    3 weeks ago
-qwen3.5:4b                              2a654d98e6fb    3.4 GB    3 weeks ago
-gemini-3-flash-preview:cloud            436200142af2    -         3 months ago
-kimi-k2-thinking:cloud                  9752ffb77f53    -         3 months ago
-gpt-oss:120b-cloud                      569662207105    -         4 months ago
-huihui_ai/qwen3-abliterated:14b         fa0eaa5098bc    9.0 GB    4 months ago
-deepseek-v3.1:671b-cloud                d3749919e45f    -         4 months ago
-qwen3-coder:480b-cloud                  e30e45586389    -         4 months ago
-huihui_ai/qwen2.5-1m-abliterated:14b    3bf3d8d5e063    9.0 GB    6 months ago
-llama3.2:3b                             a80c4f17acd5    2.0 GB    6 months ago
-gpt-oss-20b-quality:latest              f04274984f87    11 GB     6 months ago
-gemma-abliterated:latest                71e17c56807f    7.3 GB    7 months ago
-```
-
-### Local Models (Recommended)
-
-| Model | Size | RAM | Speed | Quality | Use Case |
-|-------|------|-----|-------|---------|----------|
-| `qwen3.5:4b` | 3.4 GB | 6 GB | ⚡⚡⚡ | ⭐⭐⭐ | Faster fallback |
-| `qwen3.5:9b` | 6.6 GB | 10 GB | ⚡⚡ | ⭐⭐⭐⭐ | Optional diagnostic model |
-| `llama3.2:3b` | 2.0 GB | 4 GB | ⚡⚡⚡⚡ | ⭐⭐ | Low-RAM systems |
-| `gemma-abliterated` | 7.3 GB | 10 GB | ⚡⚡ | ⭐⭐⭐⭐ | Uncensored |
-| `gpt-oss-20b` | 11 GB | 16 GB | ⚡ | ⭐⭐⭐⭐⭐ | Maximum quality |
-| `huihui_ai/qwen2.5-1m-abliterated:14b` | 9.0 GB | 14 GB | ⚡⚡ | ⭐⭐⭐⭐ | 1M context window |
-| `huihui_ai/qwen3-abliterated:14b` | 9.0 GB | 14 GB | ⚡⚡ | ⭐⭐⭐⭐ | Uncensored |
-
-### Cloud Models
-
-Cloud models require special setup and are not supported out of the box:
-
-- `gemini-3-flash-preview:cloud`
-- `kimi-k2-thinking:cloud`
-- `gpt-oss:120b-cloud`
-- `deepseek-v3.1:671b-cloud`
-- `qwen3-coder:480b-cloud`
-
----
-
-## Launch Scripts
-
-Windows batch files for quick launching:
-
-| Script | Description |
-|--------|-------------|
-| `Medfarl_Menu.bat` | **Interactive menu** with all models and modes |
-| `run.bat` | Direct streaming chat with the configured model |
-| `run-quick.bat` | Fast default launch without Ollama healthcheck |
-| `run-unsafe.bat` | Full filesystem + shell access mode |
-| `run-streaming.bat` | Direct streaming chat; respects `--model` and `MEDFARL_MODEL` |
-
-### Menu Options
-
-```
-========================================
-    Medfarl AI System - Меню запуску
-========================================
-
-ДОДАТКОВІ МОДЕЛІ (потребують встановлення):
-1. qwen3.5:4b         (3.4 GB - швидка)
-2. qwen3.5:9b         (6.6 GB - якісна)
-3. llama3.2:3b        (2.0 GB - легка)
-4. gemma-abliterated  (7.3 GB)
-5. gpt-oss-20b        (11 GB - потужна)
-6. qwen2.5-1m:14b     (9.0 GB - великий контекст)
-7. qwen3:14b          (9.0 GB - без цензури)
-8. Cloud моделі       (gemini, kimi, deepseek, qwen-coder)
-
-ЗАПУСК:
-9. Чат із Qwen 9B за замовчуванням
-10. Стандартний чат (Streaming, налаштована модель)
-11. Швидкий запуск (Streaming, без перевірки)
-12. Режим повного доступу (Unsafe)
-13. Перевірка здоров'я
-14. Список моделей
-15. Бенчмарк (порівняння моделей)
-16. ІНТЕРАКТИВНИЙ ЧАТ (Streaming, налаштована модель)
-17. Вихід
-18. Агент діагностики ПК
-```
-
----
-
-## CLI Arguments
-
-```
-usage: main.py [-h] [--model MODEL] [--list-models] [--healthcheck]
-               [--benchmark-models MODEL [MODEL ...]] [--skip-healthcheck]
-               [--timeout TIMEOUT] [--unsafe-full-access] [--stream] [--no-stream]
-
-Medfarl AI System
-
-options:
-  --agent                     Enable diagnostic agent mode and tools
-  --no-warmup                 Skip automatic Ollama startup and model preload
-  --model MODEL               Override default Ollama model for this run
-  --list-models               List installed Ollama models and exit
-  --healthcheck               Check Ollama connectivity, model availability,
-                              and tool support with --agent, then exit
-  --benchmark-models MODEL    Run short benchmark across specified models
-  --skip-healthcheck          Skip startup healthcheck before interactive session
-  --timeout TIMEOUT           Override HTTP timeout in seconds for LLM calls
-  --unsafe-full-access        Enable unrestricted filesystem, shell, and
-                              program access for this session
-  --stream                    Enable streaming output explicitly (already default)
-  --no-stream                 Disable streaming output and print full replies only
-                              after completion
-```
-
-### Argument Examples
-
-```bash
-# Use different model
-python main.py --model llama3.2:3b
-
-# Default-style launch with high-quality model and longer timeout
-python main.py --stream --model qwen3.5:9b --timeout 240
-
-# Benchmark three models
-python main.py --benchmark-models qwen3.5:4b qwen3.5:9b llama3.2:3b
-
-# Unsafe mode with default streaming
-python main.py --stream --unsafe-full-access
-```
-
----
-
-## Slash Commands
-
-Available during interactive session:
-
-| Command | Description |
-|---------|-------------|
-| `/help` | Show interactive help menu |
-| `/reset` | Clear session history and bootstrap context |
-| `/status` | Show current model, mode, and settings |
-| `/tools` | List registered tools for this session |
-| `/shell powershell` | Enter multi-line PowerShell mode (unsafe mode only) |
-| `/shell cmd` | Enter multi-line CMD mode (unsafe mode only) |
-| `/end` | Run buffered shell block |
-| `/cancel` | Discard buffered shell block |
-| `/show` | Preview buffered shell script |
-| `/quit`, `/q`, `exit` | Exit the session |
-
-### Approval Commands
-
-| Command | Description |
-|---------|-------------|
-| `pending` | Show current pending action |
-| `approve <action_id>` | Confirm and execute pending action |
-| `cancel <action_id>` | Cancel pending action |
-| `history actions` | Show action audit log |
-| `last action` | Show most recent action |
-
----
-
-## Maintenance Mode
-
-Maintenance mode keeps system-changing actions explicit and reviewable.
-
-- Agent builds a short execution plan first.
-- Action is queued with an **Action ID**.
-- Nothing mutating runs until you confirm.
-- Only one pending action is supported at a time.
-- Read-only flows (diagnostics, help, history, quarantine) remain available while action is pending.
-
-### Modes
-
-| Mode | Description |
-|------|-------------|
-| **diagnose mode** | Read-only diagnostics and summaries |
-| **repair mode** | Guarded mutating plans requiring confirmation |
-| **unsafe full access mode** | Opt-in via `--unsafe-full-access`; no approval gates |
-| **dangerous actions** | In guarded mode, high-risk operations remain approval-gated and auditable |
-
-### Supported Maintenance Intents
-
-- **Package install** → `pip_install_package` plan + confirmation
-- **File creation** → `create_text_file` plan + confirmation
-- **Program launch** → `run_program` plan + confirmation
-- **Junk preview** → `find_junk_files` direct preview
-- **Antivirus requests:**
-  - `перевір антивірусом`
-  - `онови бази антивіруса`
-  - `проскануй папку ...`
-  - `покажи загрози`
-- **Junk cleanup:**
-  - `move_junk_to_quarantine(paths)`
-  - `show_quarantine(limit)`
-  - `restore_from_quarantine(entry_ids, destination_root=None, overwrite=False)`
-  - `delete_junk_files(paths, recursive)`
-
-### Quarantine Lifecycle
-
-```
-preview → move to quarantine → show quarantine → restore or delete
-```
-
-### Live Example
-
-```text
-medfarl> встанови пакет rich
-... Action ID: a1b2c3d4 ...
-
-medfarl> approve a1b2c3d4
-... success ...
-
-medfarl> створи файл notes.txt
-... Action ID: e5f6g7h8 ...
-
-medfarl> cancel e5f6g7h8
-... cancelled ...
-
-medfarl> знайди сміття
-... preview list ...
-
-medfarl> show quarantine
-... qk-1a2b3c4d ...
-
-medfarl> restore from quarantine qk-1a2b3c4d
-... Action ID: ...
-```
-
----
-
-## Tool Reference
-
-### Diagnostics Tools
-
-| Tool | Arguments | What it does |
-|---|---|---|
-| `get_system_snapshot` | — | CPU, RAM, disk, GPU, temps, network, top 5 processes |
-| `get_disk_summary` | `top_n` | Disk usage summary with high-usage volumes |
-| `get_top_processes` | `count`, `include_idle` | Busiest active processes by CPU and memory |
-| `get_network_summary` | — | Active interfaces, IP addresses, and traffic totals |
-| `get_recent_errors` | `limit` | Recent critical/error events from Windows Event Log or journalctl |
-| `ping_host` | `host` | Ping a hostname or IP address |
-| `run_safe_command` | `command` (key) | Run a pre-approved command by its allowlist key |
-
-### Antivirus Tools
-
-| Tool | Arguments | What it does |
-|---|---|---|
-| `detect_antivirus` | — | Detect available antivirus providers and status |
-| `update_antivirus_definitions` | `provider` | Update antivirus signatures for Defender/ClamAV |
-| `run_antivirus_quick_scan` | `provider` | Start provider quick scan using adapter defaults |
-| `run_antivirus_custom_scan` | `path`, `provider` | Scan a specific file/folder path via antivirus adapter |
-| `list_antivirus_threats` | `limit`, `provider` | List recent detected threats from provider records/logs |
-
-### Package Management
-
-| Tool | Arguments | What it does |
-|---|---|---|
-| `get_installed_pip_packages` | — | All pip packages in active environment |
-| `get_pip_outdated` | — | Outdated pip packages (slow, ~15s) |
-| `get_system_packages_summary` | — | Package manager name + failed systemd services |
-| `get_failed_services` | — | List of failed systemd service names |
-| `pip_install_package` | `name`, `version`, `upgrade` | Install package via `sys.executable -m pip` (approval-gated) |
-| `pip_uninstall_package` | `name` | Uninstall package via `sys.executable -m pip` (approval-gated) |
-| `pip_check` | — | Report package dependency conflicts |
-| `pip_freeze` | — | Output installed package versions |
-
-### File Operations
-
-| Tool | Arguments | What it does |
-|---|---|---|
-| `read_file` | `path` | Read a text file within allowed roots |
-| `list_directory` | `path` | List contents of a directory within allowed roots |
-| `create_directory` | `path` | Create directory in allowed edit roots (approval-gated) |
-| `create_text_file` | `path`, `content` | Create text file in allowed edit roots (approval-gated) |
-| `write_text_file` | `path`, `content`, `overwrite` | Write file with backup-aware behavior (approval-gated) |
-| `append_text_file` | `path`, `content` | Append text with backup-aware behavior (approval-gated) |
-| `edit_text_file` | `path`, `find_text`, `replace_text` | Single replace with backup creation (approval-gated) |
-
-### Junk Cleanup
-
-| Tool | Arguments | What it does |
-|---|---|---|
-| `find_junk_files` | `scope`, `older_than_days`, `limit` | Preview temp/cache-like files and estimate cleanup impact |
-| `move_junk_to_quarantine` | `paths`, `quarantine_dir` | Move selected junk paths into quarantine (approval-gated) |
-| `show_quarantine` | `limit` | List quarantine entries with ids, source path, size, and status |
-| `restore_from_quarantine` | `entry_ids`, `destination_root`, `overwrite` | Restore quarantined entries by id (approval-gated) |
-| `delete_junk_files` | `paths`, `recursive` | Delete selected junk paths from disk (approval-gated, high risk) |
-
-### Program Execution
-
-| Tool | Arguments | What it does |
-|---|---|---|
-| `run_program` | `path`, `args`, `cwd`, `timeout` | Run approved `.exe` from allowed execution roots (approval-gated) |
-
-### Safe Command Keys
-
-| Key | Actual command |
-|---|---|
-| `df_h` | `df -h` |
-| `free_h` | `free -h` |
-| `uptime` | `uptime` |
-| `ip_addr` | `ip addr` |
-| `ip_route` | `ip route` |
-| `journal_errors` | `journalctl -p 3 -xb --no-pager` |
-| `lsblk` | `lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINT` |
-
----
-
-## Project Structure
-
-```
-medfarl-ai-system/
-├── main.py                   Entry point, argument parsing, REPL loop
-├── config.py                 Settings dataclass + environment variable overrides
-├── requirements.txt          Python dependencies (psutil, httpx, pynvml)
-├── readme.md                 This file — comprehensive documentation
-├── CHANGELOG.md              Release notes and version history
-├── LICENSE                   Project license
-│
-├── core/                     Core logic modules
-│   ├── __init__.py
-│   ├── agent.py              MedfarlAgent — orchestrator, history, bootstrap,
-│   │                         chat-first routing, approval workflow, streaming
-│   ├── approval.py           Pending action memory and approval state
-│   ├── action_guard.py       Allowed-root and path guardrails for mutating actions
-│   ├── program_runner.py     Guarded executable launcher
-│   ├── package_manager.py    Controlled pip operations via current interpreter
-│   ├── file_ops.py           Guarded file create/write/edit helpers + junk preview
-│   ├── antivirus.py          Provider adapters for Defender/ClamAV operations
-│   ├── audit.py              JSONL audit logger for mutating action lifecycle
-│   ├── llm_client.py         LLMClient + Tool dataclass, streaming support
-│   ├── system_scanner.py     SystemScanner — hardware sensors via psutil + pynvml
-│   └── lib_inspector.py      LibInspector — pip, packages, services
-│
-├── tools/                    Tool definitions
-│   ├── tools.py              Base diagnostics tools and helper functions
-│   ├── antivirus_tools.py    Antivirus tool registry and schemas
-│   └── maintenance_tools.py  Mutating maintenance tools (approval-gated)
-│
-├── ui/                       User interface
-│   └── cli.py                Terminal banner, prompt helpers, color output
-│
-├── tests/                    Unit tests
-│   ├── test_chat_routing.py  Chat-first routing and language preservation
-│   └── test_unsafe_mode.py   Unsafe mode tool routing and permissions
-│
-├── scripts/                  Utility scripts
-│   ├── smoke_intents.py      Intent normalization and routing smoke tests
-│   └── smoke_maintenance.py  Maintenance workflow smoke tests
-│
-├── junk_quarantine/          Default quarantine directory for moved junk
-│
-├── Medfarl_Menu.bat          Interactive launch menu (Windows)
-├── run.bat                   Normal launch with checks (Windows)
-├── run-quick.bat             Fast launch without Ollama check (Windows)
-├── run-unsafe.bat            Full access mode (Windows)
-├── run-streaming.bat         Interactive streaming mode (Windows)
-├── STREAMING_README.md       Streaming mode documentation
-├── ІНСТРУКЦІЯ_ЗАПУСКУ.md     Ukrainian launch instructions
-└── ЩО_ЗРОБЛЕНО.md            Changelog and changes summary
-```
-
----
-
-## Architecture
-
-### Agent (`core/agent.py`)
-
-`MedfarlAgent` owns the conversation history and the tool-calling loop.
-
-**Bootstrap.** On `__init__`, the agent calls `_bootstrap()` which collects a real
-system snapshot and inserts it into `_history` as a synthetic
-`assistant → tool_calls → tool_result` exchange. This follows the exact message format
-the OpenAI spec requires for tool results.
-
-```
-_history after bootstrap:
-  [0]  role: assistant  (synthetic — called get_system_snapshot)
-  [1]  role: tool       (real snapshot data)
-```
-
-**Agent loop.** `_run_agent_loop()` builds the full message list
-(`system_prompt + _history`), sends it to the LLM, and handles tool calls one at a time.
-Supports both normal and streaming modes.
-
-**Chat-first routing.** `handle_user_message()` classifies each request into:
-- `DIRECT_RESPONSE` — answer naturally
-- `CLARIFICATION` — ask one clarifying question
-- `TOOL_USE` — use diagnostic/maintenance tools
-- `GUIDED_MANUAL_MODE` — provide manual guidance for blocked actions
-
-**Reset.** `agent.reset()` trims `_history` back to bootstrap entries, clearing
-conversation while keeping system context.
-
-### LLM Client (`core/llm_client.py`)
-
-A thin synchronous HTTP client (via `httpx`) that wraps `/v1/chat/completions`.
-
-**Normal mode:** Sends complete request, waits for full response.
-
-**Streaming mode:** Uses `httpx.stream()` with Server-Sent Events protocol. Each token
-is printed immediately as it arrives (`print(token, end="", flush=True)`).
-
-Returns structured dict:
-```python
-{
-    "assistant_message": {"role": "assistant", "content": "..."},
-    "tool_call": {"name": "get_system_snapshot", "arguments": {}},
-    "tool_call_id": "call_abc123",   # passed through from API response
-}
-```
-
-### System Scanner (`core/system_scanner.py`)
-
-Uses `psutil` for CPU, memory, disks, network, processes and temperatures.
-Uses `pynvml` for NVIDIA GPU metrics (optional — gracefully absent if not installed).
-
-Reads `/proc/cpuinfo` on Linux and Windows registry on Windows for CPU model string.
-
-`SystemScanner.to_dict()` returns plain nested dict suitable for JSON serialisation.
-
-### Library Inspector (`core/lib_inspector.py`)
-
-`LibInspector.pip_packages()` uses `importlib.metadata` directly — no subprocess, no
-pip invocation. Fast and works without pip in PATH.
-
-`pip_outdated()` calls `pip list --outdated --format=json` via subprocess (15–30s).
-
-System packages detected by probing `dpkg-query`, `rpm -qa`, or `pacman -Q`.
-
-Services come from `systemctl list-units --type=service --all`.
-
-### Tools (`tools/tools.py`)
-
-Each tool is a `Tool` dataclass with name, description (LLM reads this), JSON Schema
-for parameters, and Python callable.
-
-**Safe command allowlist.** `SAFE_COMMANDS` maps string keys to hardcoded `argv` lists.
-Prevents prompt injection via command arguments.
-
-**Path allowlist.** `read_file` and `list_directory` check against `settings.allowed_read_roots`.
-
-**Host validation.** `ping_host` rejects shell metacharacters before subprocess execution.
-
----
-
-## Safety Model
-
-In --agent mode, Medfarl is a controlled diagnostics + maintenance assistant,
-not an unrestricted automation platform.
-
-### Guardrails
-
-- **No arbitrary shell execution** — only allowlisted safe commands
-- **No unrestricted filesystem access** — read/edit/exec roots are explicitly configured
-- **No program execution without approval** — mutating tools require confirmation
-- **No hallucinated tool results** — real data only
-- **Single pending action policy** — one mutating action at a time
-
-### Approval Workflow
-
-1. User requests mutating action (install package, run program, edit file)
-2. Agent creates pending action with unique `Action ID`
-3. Nothing executes until user confirms with `approve <action_id>`
-4. User can inspect pending state with `pending` or cancel with `cancel <action_id>`
-5. All actions logged to JSONL audit trail
-
-### Audit Logging
-
-When `MEDFARL_ENABLE_ACTION_LOG=1` (default), all mutating actions are logged to
-`medfarl_actions.log` in JSONL format:
-
-```json
-{"action_id": "a1b2c3d4", "status": "pending", "tool": "pip_install_package", ...}
-{"action_id": "a1b2c3d4", "status": "approved", "timestamp": "..."}
-{"action_id": "a1b2c3d4", "status": "executed", "result": "..."}
-```
-
-### Unsafe Full Access Mode
-
-Enabled via `--unsafe-full-access`:
-
-- All filesystem roots allowed for read/edit/exec
-- No approval gates for mutating actions
-- Direct CMD/PowerShell shell access
-- CLI-style filesystem commands (`copy`, `move`, `rm`, `mkdir`)
-
-⚠️ **Use with caution** — no safety rails in this mode.
-
----
-
-## Stability Checks
-
-Recommended regression commands:
-
-```bash
-# Healthcheck
-python main.py --healthcheck
-
-# Unit tests
-python -m unittest discover tests -v
-
-# Smoke tests
-python scripts/smoke_intents.py
-python scripts/smoke_maintenance.py
-```
-
-### Test Coverage
-
-| Test File | Coverage |
-|-----------|----------|
-| `tests/test_chat_routing.py` | Language preservation, clarification, path handling, guided/manual mode, fast-path intent normalization, fake-client tool loop |
-| `tests/test_unsafe_mode.py` | Unsafe mode tool routing, shell tool inclusion, filesystem expansion, multiline shell buffer |
-
-### Current Status
-
-```
-Ran 15 tests in 3.889s
-OK
-```
-
----
-
-## Supported Platforms
-
-| Platform | Version | Status |
-|----------|---------|--------|
-| Windows | 10/11 (x64) | ✅ Primary |
-| Linux | Ubuntu 20.04+, Debian, Arch | ✅ Supported |
-| macOS | 12+ (Monterey) | ✅ Supported |
-
-### Platform-Specific Features
-
-| Feature | Windows | Linux | macOS |
-|---------|---------|-------|-------|
-| CPU model detection | Registry | `/proc/cpuinfo` | `sysctl` |
-| GPU telemetry | pynvml (NVIDIA) | pynvml (NVIDIA) | pynvml (NVIDIA) |
-| System services | Windows Services | systemd | launchctl |
-| Package management | pip only | apt/rpm/pacman + pip | brew + pip |
-| Antivirus | Defender + ClamAV | ClamAV | ClamAV |
-| Event logs | Windows Event Log | journalctl | log show |
-
----
-
-## Known Limitations
-
-### Alpha Stage
-
-- **No GUI** — terminal-only interface
-- **No voice input** — text input only
-- **Limited antivirus** — Defender and ClamAV adapters only
-- **No remote execution** — local machine only
-- **No multi-agent** — single agent per session
-- **Streaming compatibility** — requires Ollama with SSE support
-
-### Model Constraints
-
-- **Tool calling** — requires models with tool-calling capability
-- **Context window** — large system snapshots + long conversations may exceed limits
-- **Quality variance** — smaller models (3-4B) may give less accurate diagnostics
-- **Speed** — larger models (20B+) need 16+ GB RAM and may be slow
-
-### Platform Constraints
-
-- **No arbitrary shell** — only allowlisted commands in guarded mode
-- **Windows-focused** — some diagnostics tools are Windows-specific
-- **No cloud fallback** — if Ollama is down, no automatic fallback to cloud models
-
----
-
-## Roadmap
-
-### Near Term
-
-- [ ] GUI interface (TBD: customtkinter)
-- [ ] Conversation export (JSON, Markdown)
-- [ ] System snapshot export/import
-- [ ] Model switching without restart
-- [ ] Response time statistics in REPL
-
-### Medium Term
-
-- [ ] Voice input support
-- [ ] Multi-language UI
-- [ ] Scheduled diagnostics
-- [ ] Report generation (PDF)
-- [ ] System monitoring dashboard
-
-### Long Term
-
-- [ ] Multi-agent collaboration
-- [ ] Remote machine management
-- [ ] Plugin system for custom tools
-- [ ] Cloud model fallback
-- [ ] Mobile companion app
-
----
-
-## Extending Medfarl
-
-### Adding a New Tool
-
-1. Create tool in `tools/tools.py` or new file in `tools/`:
-
-```python
-from core.llm_client import Tool
-
-def my_custom_tool(arg1: str) -> str:
-    """Do something useful."""
-    return f"Result: {arg1}"
-
-my_tool = Tool(
-    name="my_custom_tool",
-    description="Describe what this tool does for the LLM.",
-    parameters={
-        "type": "object",
-        "properties": {
-            "arg1": {
-                "type": "string",
-                "description": "Description of arg1",
-            }
-        },
-        "required": ["arg1"],
-    },
-    fn=my_custom_tool,
-)
-```
-
-2. Register in `build_tools()` function
-3. Add to tool schemas if needed
-
-### Adding Intent Normalization
-
-Add to `INTENT_NORMALIZATION` dict in `core/agent.py`:
-
-```python
-INTENT_NORMALIZATION = {
-    "my phrase": "Normalized intent",
-    ...
-}
-```
-
-### Custom System Scanner
-
-Extend `SystemScanner` in `core/system_scanner.py`:
-
-```python
-class MyCustomScanner(SystemScanner):
-    def to_dict(self):
-        snapshot = super().to_dict()
-        snapshot["my_metric"] = self._read_my_metric()
-        return snapshot
-```
-
----
-
-## Authors and Core Development Team
-
-Medfarl AI System — local-first PC diagnostics assistant.
-
----
-
-## License
-
-See [LICENSE](LICENSE) file for details.
-
----
-
-**Enjoy local-first AI diagnostics!** 🚀
+Verification snapshot: **80 tests, 79 passed, 1 skipped**, Windows, 2026-10-24.
+The symlink test was skipped because the account could not create symbolic links.
+Coverage includes chat/routing, coder files/projects, skills, plans, sessions/rewind,
+hooks, local MCP stdio and HTTP JSON/SSE behavior.
+
+Manual checks covered Qwen 9B tool use, generated Python tests, session restoration,
+terminal commands and the bundled MCP echo server. HTTP tests use a mocked transport;
+external authenticated MCP providers were not verified. Architecture and contribution
+guidance are in [TECHNICAL.md](TECHNICAL.md).
+
+## Project and license
+
+Repository: [BOHDANMARCEN/-Medfarl-AI-System](https://github.com/BOHDANMARCEN/-Medfarl-AI-System).
+See [LICENSE](LICENSE) for the Apache License 2.0 terms.

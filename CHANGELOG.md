@@ -2,6 +2,46 @@
 
 All notable product-facing changes are documented here.
 
+## Unreleased — development snapshot 2026-10-24
+
+### Added
+
+- Separate project coder (`--coder`, `run-coder.bat`, menu option 19) and `/coder` entry from chat.
+- Project templates, custom multi-file manifests, approved batch edits, SHA-256 rewrite checks and `/diff`.
+- Portable `SKILL.md` loading, seven original bundled workflows, per-turn tool restrictions and supporting-file reads.
+- Runtime-enforced plan mode and in-memory task checklists.
+- CLAUDE project instructions/rules, approved memory notes, explicit session save/resume and compaction.
+- File checkpoints and conflict-aware rewind, preserving external edits.
+- Isolated, sequential, read-only analysis agents.
+- Explicit MCP stdio/HTTP JSON/SSE tool connections and approved command hooks.
+- Single-task `--prompt`, coder `--plan`/`--resume`, model selection and runtime inspection commands.
+- `PyYAML` dependency and a local MCP echo demonstration server.
+- Technical architecture and a detailed Claude Code compatibility matrix.
+
+### Changed
+
+- Default model: `tripolskypetr/qwen3.5-uncensored-aggressive:9b`.
+- Default startup opens direct streaming chat; diagnostics use `--agent`.
+- Ollama may start automatically and preload the selected model; model downloads remain explicit.
+- Launchers check imports of all required base packages.
+- Session/checkpoint directories are Git-ignored in this repository and generated templates.
+- README, Ukrainian launch guide and streaming documentation now describe the current mode boundaries.
+
+### Fixed
+
+- Streaming function-call fragments are assembled by index, with all calls preserved for the coder.
+- Completed tool activity receives a factual fallback summary if the model returns an empty final reply.
+- Coder action confirmations remain enabled when file access is expanded.
+- Fixed read-only Git inspection avoids configured external filters and other executable read helpers.
+
+### Verification and scope
+
+- Windows snapshot: 80 tests; 79 passed and one symbolic-link test skipped.
+- Manual checks covered the configured Qwen 9B, generated Python tests, plan-mode reads,
+  session restoration, terminal commands and the local MCP demonstration server.
+- HTTP transport tests use mocked JSON/SSE responses; authenticated remote MCP services were not verified.
+- Claude compatibility is a documented subset; this entry does not announce a new release tag.
+
 ## v0.2.0-alpha - 2026-03-23
 
 First public chat-first alpha release of the new Medfarl architecture.

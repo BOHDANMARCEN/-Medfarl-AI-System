@@ -117,6 +117,9 @@ def parse_args() -> argparse.Namespace:
     )
     modes.add_argument("--coder", action="store_true", help="interactive project coding agent with approval prompts")
     parser.add_argument("--workspace", default=os.getcwd(), help="project directory for --coder")
+    parser.add_argument('-p', '--prompt', help='run one coding task then exit; actions still require approval')
+    parser.add_argument('--plan', action='store_true', help='read-only planning; no writes, shell, hooks or MCP calls')
+    parser.add_argument('--resume', metavar='NAME', help='resume a saved local coder session')
     parser.add_argument(
         "--model", help="override the default Ollama model for this run"
     )
@@ -231,6 +234,11 @@ def _shell_prompt_label(shell_name: str) -> str:
 def main() -> None:
     configure_console()
     args = parse_args()
+    if args.prompt is not None or args.plan or args.resume:
+        if args.agent:
+            print('[error] --prompt, --plan and --resume require coder mode, not --agent.')
+            raise SystemExit(2)
+        args.coder = True
 
     if args.unsafe_full_access and not args.coder:
         settings.enable_unsafe_full_access()
@@ -286,9 +294,23 @@ def main() -> None:
             raise SystemExit(preflight_code)
 
     if coder is not None:
-        if args.unsafe_full_access:
-            coder.set_full_access(True)
-        run_coder_cli(coder, stream=enable_streaming)
+        try:
+            if args.resume:
+                result = coder.extensions.resume_session(args.resume)
+                if result.get('denied'):
+                    return
+            if args.plan:
+                coder.plan_mode = True
+            if args.unsafe_full_access:
+                coder.set_full_access(True)
+            if args.prompt is not None:
+                reply = coder.handle_user_message(args.prompt, stream=enable_streaming)
+                if not coder.last_response_streamed():
+                    print(reply)
+            else:
+                run_coder_cli(coder, stream=enable_streaming)
+        finally:
+            coder.close()
         return
 
     if agent_mode:
