@@ -31,7 +31,7 @@ echo  15. Benchmark ^(compare models^)
 echo  16. INTERACTIVE MODE ^(Streaming chat, configured model^)
 echo  17. Exit
 echo  18. PC diagnostics agent ^(requires a model with tool support^)
-echo  19. CODER ^(project files, edits, tests; asks before changes^)
+echo  19. CODER ^(create projects, edit files, run tests^)
 echo.
 echo ========================================
 

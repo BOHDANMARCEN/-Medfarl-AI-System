@@ -34,8 +34,48 @@ using Ollama; it does not install or invoke Gemini CLI.
 python main.py --coder --workspace "E:\My Project"
 ```
 
-The coder can list files, search text, read files with line numbers, create files,
-replace an exact text fragment, and run tests/builds through PowerShell, CMD or sh.
+You can also enter `/coder` or `/coder "E:\My Project"` from the normal chat.
+`/quit` returns to that chat. A missing `--workspace` directory can be created after
+confirmation before the coder starts.
+
+The coder can list files, search text, read files with line numbers, create directories,
+create or rewrite files, replace an exact text fragment, and run tests/builds through
+PowerShell, CMD or sh. Existing files require a hash from `read_file` before a full
+rewrite; files changed during the approval prompt are not overwritten.
+
+Create a project directly in the coder:
+
+```text
+/new python "my calculator"
+/new web "my website"
+/new empty "my app"
+/open "E:\Existing Project"
+/project
+/diff
+```
+
+`/new` creates and opens a new directory after showing every file and its diff in
+one confirmation. `python` includes an executable CLI and unittest tests; `web`
+includes HTML, CSS and JavaScript; `empty` includes a README and `.gitignore`.
+No packages are installed and no commands run during project creation.
+Relative paths use the current project; outside paths need `/access full` first.
+`/open` selects an existing directory after confirmation, clears conversation history,
+and restricts file access to that new directory.
+
+Natural-language tasks can create arbitrary project structures through
+`create_project(path, files=[{path, content}, ...])` and edit multiple files through
+`edit_files(changes=[{path, content, expected_sha256}, ...])`. A batch supports up
+to 32 files, 512 KiB per file and 2 MiB total. All paths and existing file hashes
+are checked before approval and rechecked before writing. Each file is written
+atomically; if an I/O error interrupts a batch, already written files are reported
+and retained. Existing project directories are never overwritten by `create_project`.
+`run_command` accepts `cwd` for testing a created subproject.
+
+`/diff` shows changes made by file tools during the current project session; it does
+not track edits made by shell commands. `/reset` preserves that change list.
+Root-level `AGENTS.md`, `QWEN.md` and `GEMINI.md` are loaded as local coding guidance;
+nested guidance can be read by the model as it explores files.
+
 It sends tool results back to the model and continues until it responds or reaches
 20 steps. Streaming is enabled; use `--no-stream` to disable it. A model supporting
 tool calling is required. `--model` takes precedence over `MEDFARL_CODER_MODEL`,
@@ -53,8 +93,9 @@ confirmation, and `/access project` to revoke it. Coder mode retains action appr
 even with `--unsafe-full-access`; this flag asks to expand access at startup.
 The legacy diagnostic unsafe mode is separate.
 
-Commands: `/help`, `/status`, `/tools`, `/reset`, `/quit`, `/access full`,
-`/access project`. `/reset` clears conversation history, not files or permissions.
+Commands: `/help`, `/status`, `/tools`, `/new`, `/open`, `/project`, `/diff`, `/reset`,
+`/quit`, `/access full`, `/access project`. `/reset` clears conversation history,
+not files or permissions.
 History is held in memory for the session; long sessions may require `/reset`.
 Example task: “Read the project instructions, fix the parser bug, and run its tests.”
 

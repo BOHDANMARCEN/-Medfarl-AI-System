@@ -175,12 +175,13 @@ def _cli_help_text(unsafe_mode: bool, agent_mode: bool = True) -> str:
         "- /help   show interactive help",
         "- /reset  clear session history",
         "- /status show current model and mode",
+        "- /coder [path]  open the coding agent for files and projects; /quit returns here",
         "- /quit   exit the session",
         "- /q      short exit alias",
         "- exit    exit the session",
     ]
     if not agent_mode:
-        lines.append("- Direct model chat. Launch with --agent for PC diagnostics and tools.")
+        lines.append("- Direct model chat. Use /coder for files and projects; --agent for PC diagnostics.")
         return "\n".join(lines)
     lines.append("- /tools  list registered tools for this session")
     if unsafe_mode:
@@ -297,7 +298,7 @@ def main() -> None:
         print(f"\nMedfarl — інтерактивний чат\nМодель: {selected_model}")
         print(
             "Пишіть повідомлення й натискайте Enter. /reset — нова розмова, "
-            "/quit — вихід.\n"
+            "/coder — файли й проєкти, /quit — вихід.\n"
         )
         agent = ChatSession(
             build_client_with_timeout(selected_model, selected_timeout),
@@ -356,6 +357,19 @@ def main() -> None:
             continue
 
         lowered = user_input.strip().lower()
+        if lowered == '/coder' or lowered.startswith('/coder '):
+            project_path = user_input.strip()[len('/coder'):].strip() or args.workspace
+            if len(project_path) >= 2 and project_path[0] == project_path[-1] and project_path[0] in {'"', "'"}:
+                project_path = project_path[1:-1]
+            try:
+                coder_model = args.model or os.getenv('MEDFARL_CODER_MODEL', selected_model)
+                coding_session = CoderSession(
+                    build_client_with_timeout(coder_model, selected_timeout), project_path)
+                run_coder_cli(coding_session, stream=enable_streaming)
+                print('\nПовернення до попереднього чату.\n')
+            except (OSError, ValueError) as exc:
+                print(f'[error] {exc}')
+            continue
         if lowered in {"/help", "help cli"}:
             print(f"\n{_cli_help_text(settings.unsafe_full_access, agent_mode)}\n")
             continue
@@ -371,7 +385,7 @@ def main() -> None:
 
         if lowered in {"/tools", "tools cli"}:
             if not agent_mode:
-                print("\nДля діагностики ПК та інструментів запустіть run.bat --agent.\n")
+                print("\nДля файлів і проєктів введіть /coder; для діагностики ПК запустіть run.bat --agent.\n")
                 continue
             tool_names = "\n".join(f"- {tool.name}" for tool in agent.tool_registry)
             print(f"\nRegistered tools:\n{tool_names}\n")
