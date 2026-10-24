@@ -34,6 +34,27 @@ Enter `/coder` or `/coder "E:\My Project"` inside direct chat to open the coder;
 `/quit` returns to that chat. A directly launched coder exits on `/quit`.
 The Windows menu offers diagnostics at **18** and coder mode at **19**.
 
+## Kohana 3.1 — built-in coder personality
+
+The coding agent loads `persona/persona_kohana_v3_1.xml` when a new
+`CoderSession` starts. This is Kohana's **system-level identity** in
+`--coder` and `/coder` mode, not a skill, user message or optional chat command.
+The bundled persona includes the `world_class_programmer` standards and
+guidance for working with Codex and Claude Code **when those tools are actually
+available**. It does not install or connect either external tool automatically.
+
+`core/coder_persona.py` verifies and combines the XML with the existing
+Medfarl coder operating rules. Tool restrictions, per-action approvals,
+workspace confinement and read-only plan mode remain enforced in code.
+The persona is loaded per coder session; restart coder mode after editing XML.
+Missing or malformed XML raises an explicit error instead of silently
+reverting to a different personality.
+
+Normal chat (`python main.py`) and PC diagnostics (`--agent`) retain their
+existing system instructions. Since the full XML is included in every coder
+request, choose a model/context window large enough for the persona, tool
+schemas, project context and conversation history.
+
 ## Install and run
 
 Requirements: Python 3.10+, Git for Git tools, Ollama, and an installed Ollama

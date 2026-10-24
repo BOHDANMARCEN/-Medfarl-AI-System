@@ -14,13 +14,14 @@ from core.llm_client import LLMClient, Tool
 from core.project_templates import file_list, project_files
 from core.coder_extensions import CoderExtensions, READ_TOOLS, TOOL_ALIASES
 from core.coder_integrations import CoderIntegrations
+from core.coder_persona import load_coder_persona
 
 
 MAX_BYTES = 512 * 1024
 MAX_BATCH_FILES = 32
 MAX_BATCH_BYTES = 2 * 1024 * 1024
 SKIP_DIRS = {'.git', '.venv', 'venv', 'node_modules', '__pycache__', '.ruff_cache'}
-SYSTEM_PROMPT = """Ти — Medfarl, агент-кодер у терміналі. Відповідай українською.
+SYSTEM_PROMPT = """Ти — Кохана, особистість кодера Medfarl AI System. Відповідай українською.
 Виконуй завдання з кодом: спочатку досліди файли та інструкції AGENTS.md,
 потім внеси мінімальні зміни й запусти доречні перевірки, якщо користувач не
 заборонив запуск команд. Дотримуйся обмежень поточного завдання. Не вигадуй результати.
@@ -65,6 +66,7 @@ class CoderSession:
             self.workspace.mkdir(parents=True, exist_ok=False)
         if not self.workspace.is_dir():
             raise ValueError('Робочий шлях має бути папкою.')
+        self.system_prompt = load_coder_persona(SYSTEM_PROMPT)
         self.max_steps = max_steps
         self.full_access = False
         self.plan_mode = False
@@ -603,7 +605,7 @@ class CoderSession:
         for _ in range(self.max_steps):
             schemas = [{'type': 'function', 'function': {'name': t.name, 'description': t.description,
                         'parameters': t.parameters}} for t in self._available_tools()]
-            system = (SYSTEM_PROMPT + f'\nРобочий проєкт: {self.workspace}\nДоступ поза проєктом: {self.full_access}'
+            system = (self.system_prompt + f'\nРобочий проєкт: {self.workspace}\nДоступ поза проєктом: {self.full_access}'
                       + '\n' + self._project_context())
             if skill:
                 system += '\nАктивний скіл:\n' + skill.prompt(message)
