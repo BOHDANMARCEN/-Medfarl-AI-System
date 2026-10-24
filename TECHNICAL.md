@@ -242,7 +242,7 @@ Settings load in `config.py` at import time except the coder override read by th
 | Environment setting | Default | Meaning |
 | --- | --- | --- |
 | `MEDFARL_LLM_URL` | `http://localhost:11434` | Backend root |
-| `MEDFARL_MODEL` | `tripolskypetr/qwen3.5-uncensored-aggressive:9b` | Shared default |
+| `MEDFARL_MODEL` | `tripolskypetr/qwen3.5-uncensored-aggressive:4b` | Shared default |
 | `MEDFARL_CODER_MODEL` | Shared default | Coder override; `--model` wins |
 | `MEDFARL_TIMEOUT` | `120` | Model request seconds |
 | `MEDFARL_KEEP_ALIVE` | `30m` | Ollama preload keep-alive |

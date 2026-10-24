@@ -19,7 +19,7 @@ echo  5. gpt-oss-20b        ^(11 GB - powerful^)
 echo  6. qwen2.5-1m:14b     ^(9.0 GB - large context^)
 echo  7. qwen3:14b          ^(9.0 GB - uncensored^)
 echo  8. Cloud models       ^(gemini, kimi, deepseek, qwen-coder^)
-echo  9. Default Qwen 9B model ^(interactive chat^)
+echo  9. Default Qwen 4B model ^(interactive chat^)
 echo.
 echo  ACTIONS:
 echo  10. Default launch ^(Streaming chat, configured model^)
@@ -154,7 +154,7 @@ call "%~dp0run-streaming.bat"
 goto menu
 
 :default_model
-call "%~dp0run.bat" --model tripolskypetr/qwen3.5-uncensored-aggressive:9b
+call "%~dp0run.bat" --model tripolskypetr/qwen3.5-uncensored-aggressive:4b
 goto menu
 
 :agent

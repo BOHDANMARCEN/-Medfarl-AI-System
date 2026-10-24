@@ -2,7 +2,7 @@
 
 Local AI chat, a project coding agent, and PC diagnostics in one terminal application.
 
-Default model: **`tripolskypetr/qwen3.5-uncensored-aggressive:9b`**, served by Ollama
+Default model: **`tripolskypetr/qwen3.5-uncensored-aggressive:4b`**, served by Ollama
 at `http://localhost:11434`. Chat streams by default. The coder creates and edits
 files, runs approved commands, and supports skills, plans, project memory, saved
 sessions, checkpoints, analysis agents, hooks and MCP tools.
@@ -66,7 +66,7 @@ git clone https://github.com/BOHDANMARCEN/-Medfarl-AI-System.git
 cd .\-Medfarl-AI-System
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-ollama pull tripolskypetr/qwen3.5-uncensored-aggressive:9b
+ollama pull tripolskypetr/qwen3.5-uncensored-aggressive:4b
 .\run.bat
 ```
 
@@ -211,7 +211,7 @@ actions. It does not enable unattended execution.
 | Setting | Default | Scope |
 | --- | --- | --- |
 | `MEDFARL_LLM_URL` | `http://localhost:11434` | Backend root, without a trailing `/v1` |
-| `MEDFARL_MODEL` | `tripolskypetr/qwen3.5-uncensored-aggressive:9b` | Chat/diagnostics; coder fallback |
+| `MEDFARL_MODEL` | `tripolskypetr/qwen3.5-uncensored-aggressive:4b` | Chat/diagnostics; coder fallback |
 | `MEDFARL_CODER_MODEL` | Configured chat model | Coder override |
 | `MEDFARL_TIMEOUT` | `120` seconds | Model request timeout |
 | `MEDFARL_KEEP_ALIVE` | `30m` | Ollama preload request |

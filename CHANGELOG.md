@@ -20,7 +20,7 @@ All notable product-facing changes are documented here.
 
 ### Changed
 
-- Default model: `tripolskypetr/qwen3.5-uncensored-aggressive:9b`.
+- Default model: `tripolskypetr/qwen3.5-uncensored-aggressive:4b`.
 - Default startup opens direct streaming chat; diagnostics use `--agent`.
 - Ollama may start automatically and preload the selected model; model downloads remain explicit.
 - Launchers check imports of all required base packages.

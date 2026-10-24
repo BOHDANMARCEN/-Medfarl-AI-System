@@ -4,7 +4,7 @@ See [README](readme.md) for installation and [TECHNICAL.md](TECHNICAL.md) for
 module ownership, tool contracts, state formats and configuration. Snapshot: 2026-10-24.
 
 Medfarl implements the local workflows below using the configured Ollama model.
-The default remains `tripolskypetr/qwen3.5-uncensored-aggressive:9b`.
+The default remains `tripolskypetr/qwen3.5-uncensored-aggressive:4b`.
 This is a documented compatibility subset, not a complete Claude Code replacement.
 
 | Area | Implemented in Medfarl | Boundaries |
