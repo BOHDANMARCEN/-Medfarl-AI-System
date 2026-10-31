@@ -157,7 +157,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--unsafe-full-access",
         action="store_true",
-        help="full access for diagnostics; in coder mode ask to expand file access, retaining action approvals",
+        help="full filesystem and shell access without action approvals (current OS user permissions)",
     )
     parser.add_argument(
         "--stream",
@@ -251,7 +251,8 @@ def main() -> None:
     coder = None
     if args.coder:
         try:
-            coder = CoderSession(build_client_with_timeout(selected_model, selected_timeout), args.workspace)
+            coder = CoderSession(build_client_with_timeout(selected_model, selected_timeout), args.workspace,
+                                 unsafe_full_access=args.unsafe_full_access or settings.unsafe_full_access)
         except (OSError, ValueError) as exc:
             print(f"[error] {exc}")
             raise SystemExit(2)
@@ -386,8 +387,12 @@ def main() -> None:
             try:
                 coder_model = args.model or os.getenv('MEDFARL_CODER_MODEL', selected_model)
                 coding_session = CoderSession(
-                    build_client_with_timeout(coder_model, selected_timeout), project_path)
-                run_coder_cli(coding_session, stream=enable_streaming)
+                    build_client_with_timeout(coder_model, selected_timeout), project_path,
+                    unsafe_full_access=settings.unsafe_full_access)
+                try:
+                    run_coder_cli(coding_session, stream=enable_streaming)
+                finally:
+                    coding_session.close()
                 print('\nПовернення до попереднього чату.\n')
             except (OSError, ValueError) as exc:
                 print(f'[error] {exc}')

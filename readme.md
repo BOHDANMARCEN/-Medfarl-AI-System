@@ -178,10 +178,16 @@ File tools are workspace-confined by default. **Approved shell commands and MCP
 server processes are not sandboxed**: they use the OS user's file/network rights.
 The application does not automatically grant administrator privileges.
 
-Coder `--unsafe-full-access` still asks to expand file access and retains approvals.
-In **legacy diagnostic unsafe mode**, the flag or `MEDFARL_UNSAFE_FULL_ACCESS=1`
-expands roots and disables diagnostic action gates. Diagnostic confirmation settings
-do not disable coder approvals.
+`--unsafe-full-access` or `MEDFARL_UNSAFE_FULL_ACCESS=1` enables full local
+filesystem and shell access without additional action approvals in both agent and
+coder modes. Plan mode still blocks commands and writes. This uses the current
+Windows user's permissions; it does not grant administrator privileges.
+
+Launch `run-unsafe.bat` for the agent, or `run-coder-full-access.bat` for the coder.
+Windows PowerShell (`powershell`), PowerShell 7 (`pwsh`, when installed), and CMD
+(`cmd`) support multiline commands and UTF-8 output. Each call starts a new shell;
+use `cwd` explicitly because shell variables and directory changes do not persist.
+
 
 Default localhost Ollama requests stay local. A remote backend, approved network
 command or remote MCP server can transmit data. Saved sessions may contain

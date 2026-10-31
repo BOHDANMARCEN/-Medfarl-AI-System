@@ -11,6 +11,7 @@ import tempfile
 from typing import Callable
 
 from core.llm_client import LLMClient, Tool
+from core.shell_runner import run_shell
 from core.project_templates import file_list, project_files
 from core.coder_extensions import CoderExtensions, READ_TOOLS, TOOL_ALIASES
 from core.coder_integrations import CoderIntegrations
@@ -54,9 +55,11 @@ def confirm_action(preview: str) -> bool:
 
 class CoderSession:
     def __init__(self, client: LLMClient, workspace: str, *,
-                 confirm: Callable[[str], bool] = confirm_action, max_steps: int = 20):
+                 confirm: Callable[[str], bool] = confirm_action, max_steps: int = 20,
+                 unsafe_full_access: bool = False):
         self.client = client
-        self.confirm = confirm
+        self.unsafe_full_access = unsafe_full_access
+        self.confirm = (lambda preview: True) if unsafe_full_access else confirm
         self.workspace = Path(workspace).expanduser().resolve()
         if any(part.casefold() == '.git' for part in self.workspace.parts):
             raise ValueError('Папка .git не може бути робочим проєктом.')
@@ -68,7 +71,7 @@ class CoderSession:
             raise ValueError('Робочий шлях має бути папкою.')
         self.system_prompt = load_coder_persona(SYSTEM_PROMPT)
         self.max_steps = max_steps
-        self.full_access = False
+        self.full_access = self.unsafe_full_access
         self.plan_mode = False
         self.analysis_only = False
         self.tasks = []
@@ -421,7 +424,7 @@ class CoderSession:
     def _activate_workspace(self, target: Path, *, keep_changes: bool = False):
         self.close()
         self.workspace = target
-        self.full_access = False
+        self.full_access = self.unsafe_full_access
         self.plan_mode = False
         self.tasks = []
         self._touched.clear()
@@ -500,20 +503,7 @@ class CoderSession:
         directory = self._path(cwd)
         if not directory.is_dir():
             raise ValueError('cwd має бути наявною папкою.')
-        if shell not in {'powershell', 'cmd', 'sh'}:
-            raise ValueError('Невідома оболонка.')
-        timeout = max(1, min(int(timeout), 300))
-        if shell == 'powershell':
-            executable = shutil.which('pwsh') or shutil.which('powershell')
-            args = [executable, '-NoProfile', '-NonInteractive', '-Command', command]
-        elif shell == 'cmd':
-            executable = shutil.which('cmd.exe')
-            args = [executable, '/d', '/c', command]
-        else:
-            executable = shutil.which('sh')
-            args = [executable, '-c', command]
-        if not executable:
-            raise ValueError('Обрана оболонка не встановлена.')
+        timeout = max(1, min(int(timeout), 3600))
         if not self.confirm((_approval_context + '\n' if _approval_context else '') +
                             f'Виконати {shell} у {directory} (до {timeout} с):\n{command}\n'
                             'Команда може змінювати файли поза проєктом та звертатися до мережі.\n'
@@ -521,35 +511,10 @@ class CoderSession:
             return {'denied': True, 'executed': False}
         if self._path(cwd) != directory:
             raise RuntimeError('Робочий шлях змінився після підтвердження.')
-        kwargs = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {'start_new_session': True}
-        # Spool output to disk so a verbose build cannot fill process memory.
-        with tempfile.TemporaryFile() as output:
-            with tempfile.TemporaryFile() as hook_input:
-                if _input is not None:
-                    hook_input.write(_input.encode('utf-8'))
-                    hook_input.seek(0)
-                process = subprocess.Popen(args, cwd=directory,
-                    stdin=hook_input if _input is not None else subprocess.DEVNULL,
-                    stdout=output, stderr=subprocess.STDOUT, **kwargs)
-            timed_out = False
-            try:
-                process.wait(timeout=timeout)
-            except (subprocess.TimeoutExpired, KeyboardInterrupt) as exc:
-                if os.name == 'nt':
-                    subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                   creationflags=subprocess.CREATE_NO_WINDOW)
-                else:
-                    import signal
-                    os.killpg(process.pid, signal.SIGKILL)
-                process.wait()
-                if isinstance(exc, KeyboardInterrupt):
-                    raise
-                timed_out = True
-            output.seek(0)
-            raw = output.read(16001)
-        return {'exit_code': process.returncode, 'timed_out': timed_out,
-                'output': raw[:16000].decode('utf-8', errors='replace'), 'truncated': len(raw) > 16000}
+        result = run_shell(command, shell, directory, timeout, input_text=_input)
+        output = result['stdout'] + result['stderr']
+        return {'exit_code': result['returncode'], 'timed_out': result['timed_out'],
+                'output': output[:16000], 'truncated': result['truncated'] or len(output) > 16000}
 
     def _tools(self):
         def tool(name, description, properties, required):
@@ -607,6 +572,8 @@ class CoderSession:
                         'parameters': t.parameters}} for t in self._available_tools()]
             system = (self.system_prompt + f'\nРобочий проєкт: {self.workspace}\nДоступ поза проєктом: {self.full_access}'
                       + '\n' + self._project_context())
+            if self.unsafe_full_access:
+                system += '\nПовний доступ увімкнено: запитувані файлові дії та команди виконуються без додаткових підтверджень з правами поточного користувача ОС.'
             if skill:
                 system += '\nАктивний скіл:\n' + skill.prompt(message)
             response = self.client.chat(messages=[{'role': 'system', 'content': system}, *self.history],
@@ -757,7 +724,7 @@ def _extension_command(session: CoderSession, message: str, *, stream: bool):
         print('Hooks виконуються лише після підтвердження; у plan mode вимкнено.')
     elif verb == '/permissions':
         print('Файли: ' + ('усі дозволені ОС шляхи' if session.full_access else str(session.workspace)))
-        print('Запис/команди/MCP: з підтвердженням. Режим: ' + ('plan' if session.plan_mode else 'edit'))
+        print('Запис/команди/MCP: ' + ('без підтверджень' if session.unsafe_full_access else 'з підтвердженням') + '. Режим: ' + ('plan' if session.plan_mode else 'edit'))
     elif verb == '/model':
         if not argument.strip():
             print(session.client.model)

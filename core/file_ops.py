@@ -37,7 +37,7 @@ def _atomic_write(path: Path, content: str) -> None:
 
 def _create_backup(path: Path) -> Path:
     timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M%S")
-    backup = path.with_suffix(path.suffix + f".bak.{timestamp}")
+    backup = path.with_suffix(path.suffix + f".bak.{timestamp}.{uuid.uuid4().hex[:8]}")
     shutil.copy2(path, backup)
     return backup
 
@@ -53,7 +53,10 @@ def _read_text_file(path: Path) -> tuple[str | None, str | None]:
     if b"\x00" in raw:
         return None, f"Binary-like file is not supported for text edits: {path}"
 
-    return raw.decode("utf-8", errors="replace"), None
+    try:
+        return raw.decode("utf-8"), None
+    except UnicodeDecodeError:
+        return None, f"File is not valid UTF-8; refusing a lossy edit: {path}"
 
 
 def create_directory(path: str) -> dict[str, Any]:
@@ -155,6 +158,10 @@ def copy_path(source: str, destination: str, overwrite: bool = False) -> dict[st
     dst = _resolve_loose_path(destination)
     if not src.exists():
         return {"error": f"Source path does not exist: {src}"}
+    if src == dst or (dst.exists() and src.samefile(dst)):
+        return {"error": "Source and destination refer to the same path"}
+    if dst.is_relative_to(src) or src.is_relative_to(dst):
+        return {"error": "Source and destination must not contain one another"}
     if dst.exists():
         if not overwrite:
             return {"error": f"Destination already exists: {dst}"}
@@ -185,6 +192,10 @@ def move_path(source: str, destination: str, overwrite: bool = False) -> dict[st
     dst = _resolve_loose_path(destination)
     if not src.exists():
         return {"error": f"Source path does not exist: {src}"}
+    if src == dst or (dst.exists() and src.samefile(dst)):
+        return {"error": "Source and destination refer to the same path"}
+    if dst.is_relative_to(src) or src.is_relative_to(dst):
+        return {"error": "Source and destination must not contain one another"}
     if dst.exists():
         if not overwrite:
             return {"error": f"Destination already exists: {dst}"}

@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from config import settings
+from core.shell_runner import run_shell
+from core.action_guard import resolve_path, ensure_under_roots
 from core.lib_inspector import LibInspector
 from core.llm_client import Tool
 from core.system_scanner import SystemScanner
@@ -231,7 +233,7 @@ def build_tools(
                 name="run_shell_command",
                 description=(
                     "Run a Windows shell command with full local access. "
-                    "Use shell='powershell' or shell='cmd'."
+                    "Use powershell for Windows PowerShell, pwsh for PowerShell 7, or cmd."
                 ),
                 parameters={
                     "type": "object",
@@ -242,7 +244,7 @@ def build_tools(
                         },
                         "shell": {
                             "type": "string",
-                            "enum": ["powershell", "cmd"],
+                            "enum": ["powershell", "pwsh", "cmd"],
                             "description": "Which Windows shell to use",
                         },
                         "cwd": {
@@ -427,19 +429,9 @@ def get_recent_errors(limit: int = 10) -> dict[str, Any]:
 
 
 def _resolve_allowed_path(path: str) -> Path:
-    candidate = Path(path).expanduser()
-    if not candidate.is_absolute():
-        candidate = Path.cwd() / candidate
-    resolved = candidate.resolve()
-
-    for root in settings.allowed_read_roots:
-        root_path = Path(root).expanduser().resolve()
-        try:
-            resolved.relative_to(root_path)
-            return resolved
-        except ValueError:
-            continue
-    raise PermissionError(f"Path outside allowed roots: {resolved}")
+    if settings.unsafe_full_access:
+        return resolve_path(path)
+    return ensure_under_roots(path, settings.allowed_read_roots, label="Read")
 
 
 def _read_file(path: str, max_lines: int = 200) -> dict[str, Any]:
@@ -485,10 +477,7 @@ def _list_directory(path: str) -> dict[str, Any]:
 def _resolve_command_cwd(cwd: str | None) -> str:
     if not cwd:
         return str(Path.cwd())
-    candidate = Path(cwd).expanduser()
-    if not candidate.is_absolute():
-        candidate = Path.cwd() / candidate
-    resolved = candidate.resolve()
+    resolved = resolve_path(cwd)
     if not resolved.is_dir():
         raise FileNotFoundError(f"Working directory not found: {resolved}")
     return str(resolved)
@@ -506,59 +495,16 @@ def _run_shell_command(
         }
 
     selected_shell = str(shell or "powershell").strip().casefold()
-    working_dir = _resolve_command_cwd(cwd)
-    timeout = max(1, min(int(timeout), 3600))
-
-    if selected_shell == "cmd":
-        executable = shutil.which("cmd") or shutil.which("cmd.exe")
-        if not executable:
-            return {"error": "cmd.exe is not available on this system."}
-        argv = [executable, "/d", "/s", "/c", command]
-    else:
-        executable = (
-            shutil.which("powershell")
-            or shutil.which("powershell.exe")
-            or shutil.which("pwsh")
-        )
-        if not executable:
-            return {"error": "PowerShell is not available on this system."}
-        argv = [executable, "-NoProfile", "-Command", command]
-        selected_shell = "powershell"
-
+    metadata = {"shell": selected_shell, "command": command, "cwd": cwd or str(Path.cwd())}
     try:
-        result = subprocess.run(
-            argv,
-            cwd=working_dir,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return {
-            "shell": selected_shell,
-            "command": command,
-            "cwd": working_dir,
-            "error": "Command timed out",
-        }
-    except Exception as exc:
-        return {
-            "shell": selected_shell,
-            "command": command,
-            "cwd": working_dir,
-            "error": str(exc),
-        }
-
-    return {
-        "shell": selected_shell,
-        "command": command,
-        "cwd": working_dir,
-        "returncode": result.returncode,
-        "stdout": result.stdout[-MAX_COMMAND_OUTPUT:],
-        "stderr": result.stderr[-MAX_COMMAND_OUTPUT:],
-    }
+        working_dir = _resolve_command_cwd(cwd)
+        metadata["cwd"] = working_dir
+        result = run_shell(command, selected_shell, working_dir, timeout, limit=MAX_COMMAND_OUTPUT)
+        if result["timed_out"]:
+            result["error"] = "Command timed out"
+        return {**metadata, **result}
+    except (OSError, ValueError) as exc:
+        return {**metadata, "error": str(exc)}
 
 
 def _run_safe_command(command: str, timeout: int = 15) -> dict[str, Any]:

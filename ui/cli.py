@@ -94,7 +94,7 @@ class CLI:
             value = input(C.CYAN + label + C.RESET)
             return value.strip() if strip_input else value
         except (KeyboardInterrupt, EOFError):
-            return "exit"
+            return "/quit"
 
     def print_response(self, text: str) -> None:
         print(f"\n{text}\n")

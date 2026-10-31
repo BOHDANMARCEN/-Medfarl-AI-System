@@ -142,14 +142,16 @@ class CoderTests(unittest.TestCase):
         self.assertFalse(run.call_args.args[0].full_access)
         diagnostic.assert_not_called()
 
-    def test_unsafe_flag_does_not_bypass_coder_approval(self):
+    def test_unsafe_flag_enables_coder_without_reconfirmation(self):
         with patch('sys.argv', ['main.py', '--coder', '--workspace', self.temp.name,
                                '--unsafe-full-access', '--no-warmup', '--skip-healthcheck']), \
                 patch('main.configure_console'), patch('builtins.input', return_value='n'), \
                 patch('main.run_coder_cli') as run, patch.object(main.settings, 'enable_unsafe_full_access') as enable:
             main.main()
         enable.assert_not_called()
-        self.assertFalse(run.call_args.args[0].full_access)
+        self.assertTrue(run.call_args.args[0].full_access)
+        self.assertTrue(run.call_args.args[0].unsafe_full_access)
+        self.assertTrue(run.call_args.args[0].confirm("requested command"))
 
     def test_eof_is_denial(self):
         with patch('builtins.input', side_effect=EOFError):

@@ -154,12 +154,14 @@ class UnsafeModeTests(unittest.TestCase):
                     "main.py",
                     "--unsafe-full-access",
                     "--skip-healthcheck",
+                    "--no-warmup",
                 ],
                 input=f"/shell powershell\n{command}\n/end\n/q\n",
                 text=True,
                 capture_output=True,
                 encoding="utf-8",
                 errors="replace",
+                timeout=30,
             )
 
             self.assertEqual(proc.returncode, 0)

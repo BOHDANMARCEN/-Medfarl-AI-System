@@ -66,8 +66,9 @@ Path handling rules:
 
 Operational safety rules:
 - Read-only diagnostics may run through safe tools.
-- Any mutating action must go through approval mode first.
-- Never execute programs, edit files, or install/remove packages without explicit confirmation.
+- In guarded mode, mutating actions must go through the configured approval gates.
+- In unsafe full access mode, execute requested actions through tools without additional confirmation.
+- Shell commands run with the current OS user permissions; this does not grant administrator rights.
 - Never claim you ran something unless the tool result proves it.
 
 Formatting rules:
@@ -1102,13 +1103,13 @@ def _extract_shell_command_request(message: str) -> Optional[dict[str, Any]]:
             },
         }
 
-    powershell_match = re.match(r"(?is)^(?:powershell(?:\.exe)?|pwsh)\s+(.+)$", compact)
+    powershell_match = re.match(r"(?is)^(powershell(?:\.exe)?|pwsh(?:\.exe)?)\s+(.+)$", compact)
     if powershell_match:
         return {
             "tool_name": "run_shell_command",
             "arguments": {
-                "shell": "powershell",
-                "command": powershell_match.group(1).strip(),
+                "shell": "pwsh" if powershell_match.group(1).lower().startswith("pwsh") else "powershell",
+                "command": powershell_match.group(2).strip(),
             },
         }
 
