@@ -1,274 +1,408 @@
 # Medfarl AI System
 
-Local AI chat, a project coding agent, and PC diagnostics in one terminal application.
+**Українська** · [English](README.en.md)
 
-Default model: **`tripolskypetr/qwen3.5-uncensored-aggressive:4b`**, served by Ollama
-at `http://localhost:11434`. Chat streams by default. The coder creates and edits
-files, runs approved commands, and supports skills, plans, project memory, saved
-sessions, checkpoints, analysis agents, hooks and MCP tools.
+**Локальний AI-асистент для розмов, роботи з кодом і діагностики комп’ютера.**
 
-Development additions since the documented `v0.2.0-alpha` are listed in
-[CHANGELOG.md](CHANGELOG.md). They have not been assigned a new release tag.
+Medfarl — термінальний застосунок на Python, який працює з моделями через Ollama. Він поєднує звичайний чат, агента для створення й редагування проєктів та інструменти обслуговування ПК. Модель отримує результати реальних інструментів: вміст файлів, системні показники, вивід команд і статус виконаних дій.
 
-## Documentation
+Основне середовище розробки та перевірки — **Windows**. Застосунок має запуск через `.bat`, підтримує Windows PowerShell, PowerShell 7 і CMD. Частина функцій доступна через Python на інших ОС; системні адаптери та оболонки залежать від платформи.
 
-- [Українська інструкція запуску](ІНСТРУКЦІЯ_ЗАПУСКУ.md)
-- [Technical architecture, contracts and configuration](TECHNICAL.md)
-- [Diagnostic tools and maintenance approvals](DIAGNOSTICS.md)
-- [Coding commands and Claude Code compatibility](CLAUDE_COMPATIBILITY.md)
-- [Streaming behavior](STREAMING_README.md)
-- [Implementation and verification summary](ЩО_ЗРОБЛЕНО.md)
-- [Historical alpha release notes](ALPHA_RELEASE_NOTES.md)
+[Швидкий старт](#швидкий-старт) · [Режими роботи](#режими-роботи) · [Кодер](#робота-з-кодом) · [Термінал і доступ](#термінал-і-права-доступу) · [Налаштування](#налаштування) · [Тестування](#тестування)
 
-## Choose a mode
+## Можливості
 
-| Mode | Start | Behavior |
-| --- | --- | --- |
-| Direct chat | `python main.py` or `run.bat` | Conversation; no file or diagnostic tools |
-| Coder | `python main.py --coder` or `run-coder.bat` | Project files, edits, tests and coding workflows; action approvals stay enabled |
-| Plan | `python main.py --coder --plan` | Read-only research and planning; writes, general shell, hooks and MCP calls blocked |
-| Diagnostics | `python main.py --agent` or `run.bat --agent` | System inspection and guarded maintenance |
-| Diagnostic unsafe | `run-unsafe.bat` | Legacy diagnostic operator mode; expands roots and disables its action gates |
+| Напрям | Реалізована функціональність |
+| --- | --- |
+| Чат | Історія поточної розмови, потоковий вивід, власні системні інструкції та вибір моделі |
+| Робота з кодом | Пошук і читання файлів, створення каталогів, точкові заміни, пакетні редагування, перегляд змін, запуск тестів і команд |
+| Створення проєктів | Шаблони `python`, `web`, `empty` та довільний набір файлів через інструмент `create_project` |
+| Робочі процеси | Skills, режим планування, список задач, інструкції й пам’ять проєкту |
+| Збереження роботи | Локальні сеанси, стискання історії, файлові контрольні точки та відновлення з перевіркою конфліктів |
+| Аналіз | Окремі послідовні агенти `explorer` і `reviewer`, що працюють лише на читання |
+| Інтеграції | MCP-інструменти через stdio або HTTP; командні hooks до й після виклику інструмента |
+| Діагностика ПК | CPU, RAM, диски, процеси, мережа, доступні температурні датчики та NVIDIA GPU |
+| Обслуговування | Перевірка Python-пакетів, файлові операції, запуск програм, пошук тимчасових файлів і карантин |
+| Антивірус | Адаптери Windows Defender і ClamAV: виявлення, сканування, оновлення баз і доступні результати перевірок |
 
-Enter `/coder` or `/coder "E:\My Project"` inside direct chat to open the coder;
-`/quit` returns to that chat. A directly launched coder exits on `/quit`.
-The Windows menu offers diagnostics at **18** and coder mode at **19**.
+Діагностичні дані залежать від ОС, обладнання та встановлених служб. Medfarl використовує наявний антивірусний рушій, а не замінює його.
 
-## Kohana 3.1 — built-in coder personality
+## Швидкий старт
 
-The coding agent loads `persona/persona_kohana_v3_1.xml` when a new
-`CoderSession` starts. This is Kohana's **system-level identity** in
-`--coder` and `/coder` mode, not a skill, user message or optional chat command.
-The bundled persona includes the `world_class_programmer` standards and
-guidance for working with Codex and Claude Code **when those tools are actually
-available**. It does not install or connect either external tool automatically.
+### Вимоги
 
-`core/coder_persona.py` verifies and combines the XML with the existing
-Medfarl coder operating rules. Tool restrictions, per-action approvals,
-workspace confinement and read-only plan mode remain enforced in code.
-The persona is loaded per coder session; restart coder mode after editing XML.
-Missing or malformed XML raises an explicit error instead of silently
-reverting to a different personality.
+- **Python 3.10+**.
+- **Ollama** і завантажена модель.
+- **Git** для клонування репозиторію та Git-інструментів кодера.
+- Для кодера й діагностичного агента — модель із підтримкою виклику інструментів (*tool calling*).
 
-Normal chat (`python main.py`) and PC diagnostics (`--agent`) retain their
-existing system instructions. Since the full XML is included in every coder
-request, choose a model/context window large enough for the persona, tool
-schemas, project context and conversation history.
+Обсяг RAM, VRAM і місця на диску визначається обраною моделлю. NVIDIA GPU не є обов’язковою умовою запуску застосунку.
 
-## Install and run
+### Встановлення у Windows
 
-Requirements: Python 3.10+, Git for Git tools, Ollama, and an installed Ollama
-model. Coder/diagnostic modes require tool calling; direct chat does not.
-Hardware requirements depend on the model and context size.
+Виконайте в PowerShell після встановлення Python, Git та Ollama:
 
 ```powershell
 git clone https://github.com/BOHDANMARCEN/-Medfarl-AI-System.git
 cd .\-Medfarl-AI-System
+
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
 ollama pull tripolskypetr/qwen3.5-uncensored-aggressive:4b
 .\run.bat
 ```
 
-Launchers use `.venv\Scripts\python.exe` when present, otherwise `python`. They
-check `httpx`, `psutil` and `yaml` and install requirements if those imports fail.
-Startup can launch `ollama serve` and preload the model. **Models are not pulled
-automatically.**
+Модель у прикладі — поточне значення за замовчуванням у `config.py`. Її можна замінити через `--model` або змінні середовища.
 
-For Linux/macOS, use the Python entry point:
+`run.bat` використовує `.venv\Scripts\python.exe`, якщо файл існує, інакше — `python` із `PATH`. Перед запуском перевіряє імпорт `httpx`, `psutil`, `yaml` та за потреби встановлює залежності з `requirements.txt`.
 
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python main.py --coder --workspace /path/to/project
-```
+За замовчуванням застосунок пробує запустити Ollama й попередньо завантажити модель у пам’ять. **Ваги моделей автоматично не завантажуються**: потрібна попередня команда `ollama pull`.
 
-Windows is the primary verification environment. Shells, sensors, antivirus adapters
-and process behavior depend on the OS; Windows launchers are not cross-platform scripts.
-
-| Dependency | Purpose |
-| --- | --- |
-| `httpx>=0.27.0` | Ollama requests, completion streams and MCP HTTP |
-| `psutil>=5.9.0` | Telemetry and process inspection |
-| `PyYAML>=6.0` | Skill and rule frontmatter |
-| `pynvml>=11.5.0` | Optional NVIDIA telemetry; included in requirements |
-
-GPU telemetry needs a compatible NVIDIA GPU/driver. Chat and coding do not depend
-on GPU telemetry. Antivirus operations need an available supported provider.
-
-## Create and edit projects
+### Перевірка підключення
 
 ```powershell
-.\run-coder.bat --workspace "E:\My Project"
+.\run.bat --list-models
+.\run.bat --no-warmup --healthcheck
+.\run.bat --coder --no-warmup --healthcheck
 ```
 
-A missing workspace can be created after confirmation. Inside the coder:
+Звичайна перевірка визначає доступність Ollama й моделі. З `--coder` або `--agent` додатково перевіряється приймання запитів з інструментами; це не гарантує якість їх використання моделлю.
+
+## Режими роботи
+
+| Режим | Запуск | Поведінка |
+| --- | --- | --- |
+| Чат | `.\run.bat` | Розмова без файлових і діагностичних інструментів |
+| Кодер | `.\run-coder.bat` | Робота з проєктом; зміни й команди за замовчуванням потребують підтвердження |
+| Планування | `.\run-coder.bat --plan` | Дослідження й план без запису файлів, довільних shell-команд, hooks і MCP-викликів |
+| Діагностика | `.\run.bat --agent` | Системні інструменти та керовані дії обслуговування |
+| Агент із повним доступом | `.\run-unsafe.bat` | Діагностичний агент, довільні shell-команди й файлові дії без додаткових підтверджень |
+| Кодер із повним доступом | `.\run-coder-full-access.bat` | Робота поза каталогом проєкту й виконання дій без додаткових підтверджень |
+
+`--agent` і `--coder` взаємовиключні. Параметри `--prompt`, `--plan` і `--resume` автоматично обирають кодер та не поєднуються з `--agent`.
+
+Із чату або діагностичного режиму можна перейти до кодера:
 
 ```text
-/new python "my calculator"
-/new web "my website"
-/new empty "my app"
-/open "E:\Existing Project"
+/coder "E:\Projects\my-app"
+```
+
+Команда `/quit` поверне до попереднього чату. Якщо кодер запущено окремо, вона завершить застосунок.
+
+Додаткові сценарії запуску:
+
+- `Medfarl_Menu.bat` — меню моделей і режимів; пункт **18** відкриває діагностику, **19** — кодер.
+- `run-quick.bat` — пропускає стартову перевірку, але залишає попереднє завантаження моделі.
+- `run-streaming.bat` — явно вмикає потоковий вивід; він також увімкнений за замовчуванням.
+
+## Робота з кодом
+
+### Відкриття та створення проєкту
+
+```powershell
+.\run-coder.bat --workspace "E:\Projects\my-app"
+```
+
+Якщо робочого каталогу немає, кодер запропонує створити його. Усередині сеансу:
+
+```text
+/new python "calculator"
+/new web "landing-page"
+/new empty "new-app"
+/open "E:\Projects\existing-app"
 /project
 /diff
 ```
 
-`/new` previews every file, asks once, creates the project and selects it as the
-workspace. Templates contain a Python CLI with unittest tests, a static HTML/CSS/JS
-site, or a README and `.gitignore`. Creation does not install packages or run code.
-Natural-language tasks can create arbitrary structures:
+`/new` створює й відкриває проєкт. Шаблон `python` містить CLI та unittest-тест; `web` — HTML, CSS і JavaScript; `empty` — README та `.gitignore`. Створення шаблону саме по собі не встановлює пакети й не запускає програму.
+
+Завдання можна описувати природною мовою:
 
 ```text
-Create a calculator in calc with source files, a README and tests, then verify it.
-Read parser.py, fix the parsing bug and run the relevant tests.
+Створи Python-проєкт калькулятора з тестами та перевір його роботу.
+Прочитай parser.py, знайди причину помилки й виправ її.
+Додай обробку порожнього вводу та запусти відповідні тести.
 ```
 
-The coder lists/searches/reads files, creates directories, makes exact replacements,
-and applies batches of **1–32 files**, **512 KiB per file**, **2 MiB per batch**.
-Full rewrites require the current SHA-256 from `read_file`; approval-time conflicts
-are checked before writing. Each file write is atomic. A multi-file batch can
-retain earlier writes on an I/O error and reports completed paths.
+Кодер підтримує читання, пошук, створення файлів, точкові заміни й пакетні редагування. Перед перезаписом через `write_file` потрібен актуальний SHA-256 із `read_file`. Перед записом перевіряються конфлікти зі сторонніми змінами.
 
-## Coding workflows
+Обмеження файлових інструментів:
 
-| Commands | Purpose |
+- до **512 KiB** на текстовий файл;
+- від **1 до 32 файлів** і до **2 MiB** на пакетне редагування;
+- атомарний запис окремого файла;
+- пакет не є єдиною транзакцією: у разі помилки вже записані файли можуть залишитися зміненими;
+- прямий доступ файлових інструментів до внутрішніх файлів `.git` заблоковано навіть за розширеного доступу.
+
+### Команди кодера
+
+| Команди | Призначення |
 | --- | --- |
-| `/help`, `/status`, `/tools`, `/project` | Commands, model/mode, permitted tools and workspace |
-| `/skills`, `/skill name arguments` | Discover and run a reusable workflow |
-| `/review`, `/debug`, `/test`, `/refactor`, `/docs` | Bundled coding workflows |
-| `/commit`, `/implementation-plan` | Explicit commit preparation or read-only planning |
-| `/plan [task]`, `/mode edit`, `/tasks` | Research without writes, approved execution, checklist |
-| `/init`, `/remember text`, `/memory` | Project instructions and approved notes |
-| `/save work`, `/sessions`, `/resume work`, `/compact` | Save, list, restore and summarize conversations |
-| `/checkpoint before`, `/rewind before` | Track and restore file-tool changes with conflict checks |
-| `/agents`, `/agent reviewer task` | Isolated, sequential, read-only analysis |
-| `/mcp`, `/mcp connect name`, `/mcp disconnect name` | Explicit external tool connections |
-| `/hooks`, `/permissions`, `/model [name]`, `/doctor` | Configuration and runtime inspection |
-| `/access full`, `/access project` | Expand file access after confirmation, or restrict it |
-| `/reset`, `/quit` | Clear conversation history, or leave the coder |
+| `/help`, `/status`, `/tools`, `/project` | Довідка, стан сеансу, доступні інструменти й робочий каталог |
+| `/new python\|web\|empty "шлях"`, `/open "шлях"` | Створення або відкриття проєкту |
+| `/diff` | Зміни, відстежувані файловими інструментами поточного сеансу |
+| `/plan [завдання]`, `/mode edit`, `/tasks` | Планування, повернення до виконання, список задач |
+| `/skills`, `/skill назва [аргументи]` | Перегляд і запуск skills |
+| `/review`, `/debug`, `/test`, `/refactor`, `/docs` | Вбудовані робочі процеси |
+| `/commit`, `/implementation-plan` | Робочі процеси для коміту та плану реалізації |
+| `/init`, `/remember текст`, `/memory` | Створення `CLAUDE.md`, додавання й читання нотаток |
+| `/save назва`, `/sessions`, `/resume назва`, `/compact` | Збереження, відновлення та стискання історії |
+| `/checkpoint назва`, `/rewind назва` | Файлова контрольна точка та відновлення |
+| `/agents`, `/agent reviewer завдання` | Окремий аналіз без змін |
+| `/mcp`, `/mcp connect назва`, `/mcp disconnect назва` | Керування підключеннями MCP |
+| `/hooks`, `/permissions`, `/model [назва]`, `/doctor` | Інтеграції, права, модель і відомості про середовище |
+| `/access full`, `/access project` | Розширення або звуження області файлових інструментів |
+| `/reset`, `/quit` | Очищення історії або вихід |
 
-Skills load from bundled `skills/`, personal `.claude/skills`/`.medfarl/skills`,
-and project `.claude/commands`, `.claude/skills` and `.medfarl/skills`.
-`allowed-tools` can only restrict a turn; skills never grant extra rights.
+Команди skills передають інструкції моделі; їхній результат залежить від моделі й доступних інструментів. `/commit` не є безумовним викликом `git commit`.
 
-Root `AGENTS.md`, `QWEN.md`, `GEMINI.md`, `CLAUDE.md`, `.claude/CLAUDE.md` and
-project memory provide guidance. Nested CLAUDE files and matching rules load after
-relevant files are read. Notes live in `.medfarl/memory.md`; sessions/checkpoints
-live under `.medfarl/sessions/` and `.medfarl/checkpoints/`. Those state directories
-are Git-ignored in this repository and starter templates; add them to existing projects.
+### Skills, інструкції та пам’ять
 
-Resume restores history, tasks and tracked file baselines, retains the currently
-selected model and revokes full access. Rewind covers file-tool edits, not a whole
-disk, shell changes or Git state; external changes block it. `/reset` preserves
-files, the change list and access mode. `/open` selects another project and clears
-its conversation.
+Skills завантажуються з вбудованого `skills/`, особистих `~/.claude/skills`, `~/.medfarl/skills` та каталогів проєкту `.claude/commands`, `.claude/skills`, `.medfarl/skills`. Проєктні визначення мають пріоритет над особистими й вбудованими. Параметр `allowed-tools` обмежує доступні інструменти завдання, але не надає нових прав.
 
-[CLAUDE_COMPATIBILITY.md](CLAUDE_COMPATIBILITY.md) documents formats, examples and
-boundaries. Compatibility is partial: OAuth, IDE/LSP, cloud services, agent teams
-and full Claude plugin semantics are outside the current implementation.
+Кодер читає кореневі `AGENTS.md`, `QWEN.md`, `GEMINI.md`, `CLAUDE.md`, `.claude/CLAUDE.md` і `.medfarl/memory.md`. Вкладені `CLAUDE.md` та відповідні правила `.claude/rules/` долучаються з урахуванням прочитаних файлів.
 
-## Approvals and data access
+| Дані | Розташування |
+| --- | --- |
+| Пам’ять проєкту | `.medfarl/memory.md` |
+| Збережені сеанси | `.medfarl/sessions/` |
+| Контрольні точки | `.medfarl/checkpoints/` |
+| Власні агенти аналізу | `.claude/agents/*.md` |
 
-Coder writes show a diff; commands show the shell, cwd and timeout. `y`, `yes` or
-`так` approves; Enter/EOF denies. Denial stops the task and preserves completed
-actions. MCP connections/calls, hook commands, session saves/restores and checkpoint
-restores have explicit approvals. Plan mode blocks state saves as well as code writes.
+Сеанси зберігаються локально й не шифруються. Каталоги сеансів і контрольних точок внесені до `.gitignore` цього репозиторію та шаблонів; для стороннього проєкту перевірте його правила окремо.
 
-File tools are workspace-confined by default. **Approved shell commands and MCP
-server processes are not sandboxed**: they use the OS user's file/network rights.
-The application does not automatically grant administrator privileges.
+`/rewind` охоплює відстежувані файлові зміни, а не весь диск, Git-стан або довільні наслідки shell-команд. Сторонні зміни блокують відновлення конфліктних файлів. `/reset` очищає розмову, зберігаючи файли й режим доступу. `/resume` зберігає поточну модель та звужує область файлових інструментів до проєкту; це не скасовує автоматичне схвалення в сеансі, запущеному з `--unsafe-full-access`.
 
-`--unsafe-full-access` or `MEDFARL_UNSAFE_FULL_ACCESS=1` enables full local
-filesystem and shell access without additional action approvals in both agent and
-coder modes. Plan mode still blocks commands and writes. This uses the current
-Windows user's permissions; it does not grant administrator privileges.
+### Персона кодера
 
-Launch `run-unsafe.bat` for the agent, or `run-coder-full-access.bat` for the coder.
-Windows PowerShell (`powershell`), PowerShell 7 (`pwsh`, when installed), and CMD
-(`cmd`) support multiline commands and UTF-8 output. Each call starts a new shell;
-use `cwd` explicitly because shell variables and directory changes do not persist.
+Кодер використовує **Кохану 3.1** із `persona/persona_kohana_v3_1.xml`. XML перевіряється й додається до системних інструкцій під час створення `CoderSession`. Після зміни персони потрібно відкрити новий сеанс. Відсутній або некоректний файл спричиняє явну помилку.
 
+Персона діє лише в `--coder` та `/coder`. Згадки зовнішніх інструментів у її тексті не встановлюють і не підключають ці інструменти. Повний текст персони входить до запитів моделі та займає частину контекстного вікна.
 
-Default localhost Ollama requests stay local. A remote backend, approved network
-command or remote MCP server can transmit data. Saved sessions may contain
-conversation/file content and are not encrypted. The diagnostic JSONL audit covers
-its own action workflow, not every coder operation.
+## Термінал і права доступу
 
-## Configuration and CLI
+### Звичайний режим
 
-Chat/diagnostic model priority: `--model` > `MEDFARL_MODEL` > built-in default.
-Coder priority: `--model` > `MEDFARL_CODER_MODEL` > configured chat model.
+Файлові інструменти кодера обмежені робочим проєктом. Зміни показують попередній перегляд; запуск команд — оболонку, каталог і тайм-аут. `y`, `yes` або `так` підтверджують дію, Enter чи завершення вводу — відхиляють.
+
+`/access full` розширює область файлових інструментів, але **не вимикає підтвердження** у звичайному сеансі. `/access project` обмежує саме файлові інструменти: це не ізоляція shell-команд або зовнішніх серверів.
+
+### Повний доступ
 
 ```powershell
-$env:MEDFARL_CODER_MODEL = "your-installed-tool-model"
+.\run-unsafe.bat
+.\run-coder-full-access.bat --workspace "E:\Projects\my-app"
+```
+
+Еквівалентний параметр Python CLI — `--unsafe-full-access`. Також доступна змінна `MEDFARL_UNSAFE_FULL_ACCESS=1`.
+
+У цьому режимі дії агента й кодера виконуються без додаткових підтверджень. Для кодера це також стосується підключень MCP, зовнішніх викликів, hooks і збереження локального стану. Режим планування продовжує блокувати запис та виконання команд.
+
+**Команди мають права поточного користувача ОС.** Застосунок автоматично не надає права адміністратора й не ізолює shell-команди від решти файлової системи чи мережі.
+
+### Оболонки
+
+| Значення `shell` | Виконання |
+| --- | --- |
+| `powershell` | Windows PowerShell через `powershell.exe` |
+| `pwsh` | PowerShell 7, якщо `pwsh` є в `PATH` |
+| `cmd` | Windows Command Prompt через `cmd.exe` |
+| `sh` | Сумісна shell, якщо встановлена; доступна в інструменті кодера |
+
+Спільний виконавець підтримує багаторядкові скрипти, UTF-8, коди завершення, обмежений вивід і завершення дерева процесів після тайм-ауту. Кожен виклик створює новий процес: змінні й зміни каталогу між командами не зберігаються. Робочий каталог задається через `cwd`. Інтерактивні програми, які очікують звичайне введення з терміналу, не є основним сценарієм цього виконавця.
+
+У діагностичному агенті з повним доступом доступний прямий багаторядковий режим:
+
+```text
+/shell powershell
+Get-Location
+Get-ChildItem -File | Select-Object -First 5
+/end
+```
+
+`/shell cmd` обирає CMD, `/show` показує буфер, `/cancel` скасовує його. PowerShell 7 можна викликати окремим запитом `pwsh Get-Date`. У кодері shell-команди виконує інструмент `run_command` у межах завдання.
+
+## Діагностика та обслуговування ПК
+
+```powershell
+.\run.bat --agent
+```
+
+Приклади запитів:
+
+```text
+Зроби загальну діагностику ПК
+Покажи найважчі процеси
+Перевір диски і вільне місце
+Перевір стан мережі
+Покажи помилки в системних логах
+```
+
+Агент використовує системний знімок, спеціалізовані інструменти та маршрутизацію запитів. Частина стандартних запитів обробляється без генерації відповіді моделлю; для повноцінної роботи з довільними запитами потрібен доступний LLM.
+
+Інструменти обслуговування охоплюють:
+
+- перевірку залежностей, `pip freeze`, встановлення та видалення Python-пакетів у середовищі поточного інтерпретатора;
+- створення й редагування текстових файлів, запуск дозволених програм;
+- пошук тимчасових файлів, переміщення в карантин, перегляд і відновлення;
+- Windows Event Log або `journalctl`, якщо доступні;
+- сканування та оновлення доступного Windows Defender або ClamAV.
+
+У звичайному режимі області читання, запису та запуску програм визначаються налаштуваннями й типово дорівнюють поточному каталогу процесу. Це окремі налаштування від `--workspace` кодера.
+
+Для дій із підтвердженням: `pending`, `approve <id>`, `cancel <id>`. Одночасно очікує одна дія. Історія доступна через `history actions` і `last action`; діагностичний журнал за замовчуванням записується в `medfarl_actions.log`. Він не є повним журналом усіх дій кодера.
+
+## MCP та hooks
+
+Кодер читає конфігурації MCP з `.mcp.json` і `.medfarl/mcp.json` у робочому проєкті. Підтримуються локальні сервери через `command`/`args` і HTTP-сервери через `url` з необов’язковими `headers`. Значення `${VARIABLE}` підставляються зі змінних середовища.
+
+Сервери не підключаються автоматично після виявлення конфігурації:
+
+```text
+/mcp
+/mcp connect my-server
+/mcp disconnect my-server
+```
+
+Hooks завантажуються з `.claude/settings.json` і `.medfarl/settings.json`. Реалізовано командні hooks для `PreToolUse` та `PostToolUse`; вони отримують JSON-контекст через stdin. У режимі планування hooks і MCP-виклики вимкнені.
+
+Сумісність із форматами `.claude` часткова: немає повної реалізації сторонньої платформи, OAuth, IDE/LSP, хмарних команд агентів або всіх plugin-механізмів. Вбудовані агенти аналізу працюють **послідовно**, в окремому контексті й без права змінювати файли чи запускати shell-команди.
+
+## Налаштування
+
+Конфігурація читається зі змінних середовища під час запуску. Автоматичного завантаження `.env` немає.
+
+Пріоритет моделі:
+
+- чат і діагностика: `--model` → `MEDFARL_MODEL` → значення в `config.py`;
+- кодер: `--model` → `MEDFARL_CODER_MODEL` → налаштована основна модель.
+
+```powershell
+$env:MEDFARL_CODER_MODEL = "назва-встановленої-моделі"
 .\run-coder.bat --timeout 240
-python main.py --list-models
-python main.py --no-warmup --healthcheck
-python main.py --coder --no-warmup --healthcheck
-python main.py --coder --plan -p "Explain the project"
-python main.py --coder --resume work
-python main.py --no-stream
 ```
 
-`--prompt`/`-p`, `--plan` and `--resume` imply coder mode and reject `--agent`.
-One-shot execution prints text and retains approvals; noninteractive EOF denies
-actions. It does not enable unattended execution.
-
-| Setting | Default | Scope |
+| Змінна | За замовчуванням | Призначення |
 | --- | --- | --- |
-| `MEDFARL_LLM_URL` | `http://localhost:11434` | Backend root, without a trailing `/v1` |
-| `MEDFARL_MODEL` | `tripolskypetr/qwen3.5-uncensored-aggressive:4b` | Chat/diagnostics; coder fallback |
-| `MEDFARL_CODER_MODEL` | Configured chat model | Coder override |
-| `MEDFARL_TIMEOUT` | `120` seconds | Model request timeout |
-| `MEDFARL_KEEP_ALIVE` | `30m` | Ollama preload request |
-| `MEDFARL_AUTOSTART_OLLAMA` | `1` | Allow startup to launch Ollama |
-| `MEDFARL_WARMUP` | `1` | Preload unless `--no-warmup` |
-| `MEDFARL_CHAT_SYSTEM_PROMPT` | Built-in prompt | Direct chat only |
-| `MEDFARL_CHAT_REASONING_EFFORT` | `none` | Direct chat only |
+| `MEDFARL_LLM_URL` | `http://localhost:11434` | Коренева адреса бекенду, без `/v1` наприкінці |
+| `MEDFARL_MODEL` | `tripolskypetr/qwen3.5-uncensored-aggressive:4b` | Основна модель |
+| `MEDFARL_CODER_MODEL` | Основна модель | Окрема модель кодера |
+| `MEDFARL_TIMEOUT` | `120` | Тайм-аут HTTP-запиту, секунди |
+| `MEDFARL_KEEP_ALIVE` | `30m` | Час утримання моделі при попередньому завантаженні |
+| `MEDFARL_AUTOSTART_OLLAMA` | `1` | Дозволити автоматичний запуск Ollama |
+| `MEDFARL_WARMUP` | `1` | Попереднє завантаження моделі |
+| `MEDFARL_MAX_TOOL_STEPS` | `8` | Ліміт кроків циклу діагностичного агента; кодер має окремий ліміт |
+| `MEDFARL_CHAT_SYSTEM_PROMPT` | Вбудовані інструкції | Системний текст звичайного чату |
+| `MEDFARL_CHAT_REASONING_EFFORT` | `none` | Параметр міркування звичайного чату |
+| `MEDFARL_UNSAFE_FULL_ACCESS` | `0` | Повний доступ без додаткових підтверджень |
 
-`--skip-healthcheck` skips preflight, not preload; `--no-warmup` controls preload.
-Non-Ollama backends need compatible endpoints and may require both flags. `/model`,
-listing and preflight use Ollama APIs. See [TECHNICAL.md](TECHNICAL.md) for all
-diagnostic root/confirmation/audit settings and `python main.py --help` for flags.
+Налаштування діагностичного агента:
 
-| Windows launcher | Behavior |
+| Змінна | Значення за замовчуванням |
 | --- | --- |
-| `run.bat` | Dependency check and streaming chat |
-| `run-coder.bat` | Coder, forwarding additional flags |
-| `run-streaming.bat` | Explicit streaming; respects model overrides |
-| `run-quick.bat` | Skips preflight; retains preload |
-| `run-unsafe.bat` | Legacy diagnostic unsafe mode |
-| `Medfarl_Menu.bat` | Model/mode menu |
+| `MEDFARL_ALLOWED_READ_ROOTS`, `MEDFARL_ALLOWED_EDIT_ROOTS`, `MEDFARL_ALLOWED_EXEC_ROOTS` | Поточний каталог процесу |
+| `MEDFARL_CONFIRM_EXEC`, `MEDFARL_CONFIRM_DELETE`, `MEDFARL_CONFIRM_PACKAGE_CHANGES`, `MEDFARL_CONFIRM_FILE_EDITS` | `1` |
+| `MEDFARL_ENABLE_ACTION_LOG` | `1` |
+| `MEDFARL_ACTION_LOG_PATH` | `medfarl_actions.log` у поточному каталозі |
+| `MEDFARL_JUNK_QUARANTINE_DIR` | `junk_quarantine` у поточному каталозі |
 
-## Diagnostics and maintenance
+Списки каталогів розділяються `;` у Windows і `:` у POSIX-системах. Параметри підтвердження діагностичного агента не керують звичайними підтвердженнями кодера.
 
-Start `run.bat --agent` for snapshots, CPU/RAM/disks/processes/network, package
-inspection, supported logs and available NVIDIA sensors. Guarded maintenance
-includes approved file/program/package actions, junk quarantine and supported
-antivirus adapters. Availability depends on OS, hardware and installed tools.
-
-Diagnostic approval commands: `pending`, `approve <id>`, `cancel <id>`,
-`history actions`, `last action`. One mutation may be pending at a time.
-Diagnostic roots default to the process cwd and are separate from the coder
-workspace. Multi-line `/shell powershell` and `/shell cmd` belong to diagnostic unsafe mode.
-
-## Verification and development
+### Корисні параметри CLI
 
 ```powershell
-python -m unittest discover -s tests -v
+.\run.bat --help
+.\run.bat --no-stream
+.\run-coder.bat --plan -p "Досліди архітектуру проєкту й підготуй план змін"
+.\run-coder.bat --resume work
+.\run-coder-full-access.bat -p "Прочитай README та перевір структуру проєкту"
 ```
 
-Verification snapshot: **80 tests, 79 passed, 1 skipped**, Windows, 2026-10-24.
-The symlink test was skipped because the account could not create symbolic links.
-Coverage includes chat/routing, coder files/projects, skills, plans, sessions/rewind,
-hooks, local MCP stdio and HTTP JSON/SSE behavior.
+`-p` виконує одне завдання та завершує сеанс. У звичайному режимі підтвердження залишаються активними; завершення stdin відхиляє дію. Для запуску без підтверджень потрібен явно обраний повний доступ.
 
-Manual checks covered Qwen 9B tool use, generated Python tests, session restoration,
-terminal commands and the bundled MCP echo server. HTTP tests use a mocked transport;
-external authenticated MCP providers were not verified. Architecture and contribution
-guidance are in [TECHNICAL.md](TECHNICAL.md).
+`--skip-healthcheck` пропускає перевірку перед сеансом; `--no-warmup` вимикає автоматичний запуск Ollama й попереднє завантаження моделі. Це незалежні параметри. `--benchmark-models` запускає коротке порівняння встановлених моделей на діагностичних запитах.
 
-## Project and license
+Генерація використовує `/v1/chat/completions`, а перелік моделей, перевірка та прогрівання — Ollama API. Підтримку довільного OpenAI-сумісного сервера як повної заміни Ollama не гарантовано.
 
-Repository: [BOHDANMARCEN/-Medfarl-AI-System](https://github.com/BOHDANMARCEN/-Medfarl-AI-System).
-See [LICENSE](LICENSE) for the Apache License 2.0 terms.
+## Структура репозиторію
+
+```text
+main.py                       CLI, запуск і перемикання режимів
+config.py                     Налаштування та політика доступу
+core/
+  chat.py                     Звичайний чат
+  agent.py                    Маршрутизація й цикл діагностичного агента
+  coder.py                    Кодер, файлові інструменти та його CLI
+  coder_extensions.py         Skills, пам’ять, сеанси, checkpoints, аналіз
+  coder_integrations.py       MCP та hooks
+  coder_persona.py            Завантаження персони
+  llm_client.py               Ollama, генерація й потокові відповіді
+  shell_runner.py             Спільний запуск shell-команд
+  system_scanner.py           Системні показники
+  file_ops.py                 Файлові операції та карантин
+  program_runner.py           Запуск програм
+  package_manager.py          Дії з pip
+  antivirus.py                Антивірусні адаптери
+  approval.py, audit.py        Підтвердження й журнал діагностичних дій
+  project_templates.py        Шаблони проєктів
+  action_guard.py             Перевірка допустимих шляхів
+  lib_inspector.py            Пакети та служби
+persona/                      XML-персона кодера
+skills/                       Вбудовані робочі процеси
+tools/                        Реєстри інструментів і тестовий MCP-сервер
+ui/                           Термінальний інтерфейс
+tests/                        Автоматичні тести
+scripts/                      Допоміжні перевірки
+```
+
+Залежності визначено в `requirements.txt`: `httpx`, `psutil`, `PyYAML`, `pynvml`. Останній використовується для необов’язкової NVIDIA-телеметрії, але включений до загального списку встановлення.
+
+## Тестування
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+Остання перевірка в Windows, **31 жовтня 2026 року**: **99 тестів — 98 успішних, 1 пропущений**. Це зафіксований результат локального запуску, а не статус CI.
+
+Перевірки охоплюють чат і маршрутизацію, файлові операції кодера, шаблони, skills, планування, сеанси, контрольні точки, hooks, MCP, повний доступ та виконання shell-команд. Регресійні тести перевіряють Unicode, багаторядковий CMD, коди завершення, тайм-аути й дочірні процеси, збереження резервних копій і захист джерела при копіюванні або переміщенні.
+
+Проходження тестів не підтверджує якість відповідей усіх моделей або сумісність із кожним зовнішнім MCP-сервером. Деталі останніх виправлень і меж перевірки — в [аудиті від 31.10.2026](AUDIT_2026-10-31.md).
+
+## Типові проблеми
+
+| Симптом | Що перевірити |
+| --- | --- |
+| Ollama недоступний | Чи встановлено Ollama, чи працює сервер і чи правильний `MEDFARL_LLM_URL`; за потреби запустіть `ollama serve` |
+| Модель не знайдено | `ollama list` або `--list-models`; завантажте модель через `ollama pull` і звірте її точну назву |
+| Чат працює, інструменти — ні | Перевірте модель командою `--coder --no-warmup --healthcheck` або відповідником для `--agent` |
+| Перевищено тайм-аут моделі | Збільште `--timeout`; врахуйте ресурси ПК, розмір моделі й контексту |
+| Оболонка не встановлена | Перевірте її наявність у `PATH`; `pwsh` потребує окремо встановленого PowerShell 7 |
+| Шлях поза дозволеною областю | Для кодера перевірте `--workspace` і `/permissions`; для діагностики — `MEDFARL_ALLOWED_*_ROOTS` |
+| У плануванні не виконується команда | Перейдіть до `/mode edit`, коли дослідження завершено |
+| Частина даних GPU, служб або антивірусу відсутня | Перевірте обладнання, драйвери, провайдера та доступність відповідного адаптера на цій ОС |
+
+Звичайний чат не має файлових інструментів: для фактичного створення або редагування файлів відкрийте `/coder`.
+
+## Дані та межі реалізації
+
+За типової адреси `localhost` запити до моделі надсилаються локальному Ollama. Вибір віддаленого бекенду, мережеві shell-команди, запити до пакетних репозиторіїв або зовнішні MCP-сервери можуть передавати дані за межі комп’ютера.
+
+Поточний інтерфейс — CLI. Графічного редактора, вбудованого браузера, повноцінного IDE або постійного інтерактивного термінального сеансу в кодовій базі немає. Підтримка інших ОС не означає повного паритету діагностичних функцій із Windows.
+
+## Документація
+
+- [Інструкція запуску](ІНСТРУКЦІЯ_ЗАПУСКУ.md)
+- [Технічний опис](TECHNICAL.md)
+- [Діагностичні інструменти](DIAGNOSTICS.md)
+- [Сумісність форматів і розширень](CLAUDE_COMPATIBILITY.md)
+- [Потокові відповіді](STREAMING_README.md)
+- [Історія змін](CHANGELOG.md)
+- [Звіт перевірки 31.10.2026](AUDIT_2026-10-31.md)
+
+Частина тематичних документів описує попередні ревізії. Для поведінки повного доступу орієнтуйтеся на цей README та поточний код; старі твердження про обов’язкові підтвердження кодера не поширюються на `--unsafe-full-access`.
+
+## Ліцензія
+
+Код поширюється за [Apache License 2.0](LICENSE). Моделі й сторонні компоненти мають власні ліцензії та умови використання.
